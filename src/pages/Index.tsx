@@ -72,16 +72,16 @@ const Home = () => {
           </div>
         </div>
 
-        {/* Calendar Preview */}
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay-2">
+        {/* Calendar Preview — clickable */}
+        <button
+          onClick={() => navigate('/calendar')}
+          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay-2 hover:border-accent/30 transition-colors"
+        >
           <div className="flex justify-between items-center mb-3">
             <h2 className="text-sm font-semibold text-foreground">Calendar</h2>
-            <button
-              onClick={() => navigate('/calendar')}
-              className="text-xs text-accent font-medium flex items-center gap-0.5"
-            >
+            <span className="text-xs text-accent font-medium flex items-center gap-0.5">
               View <ChevronRight className="w-3.5 h-3.5" />
-            </button>
+            </span>
           </div>
           <div className="space-y-2">
             {[
@@ -101,7 +101,7 @@ const Home = () => {
               </div>
             ))}
           </div>
-        </div>
+        </button>
       </div>
     </div>
   );

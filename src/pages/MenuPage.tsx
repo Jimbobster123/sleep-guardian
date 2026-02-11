@@ -1,10 +1,12 @@
 import PageHeader from '@/components/PageHeader';
 import { useApp } from '@/contexts/AppContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useNavigate } from 'react-router-dom';
-import { User, Settings, Moon, Bell, HelpCircle, LogOut, ChevronRight, Zap } from 'lucide-react';
+import { User, Settings, Moon, Sun, Bell, HelpCircle, LogOut, ChevronRight, Zap } from 'lucide-react';
 
 const MenuPage = () => {
   const { crisisMode, setCrisisMode } = useApp();
+  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
   const navItems = [
@@ -73,6 +75,37 @@ const MenuPage = () => {
               <p>• Streak penalties relaxed</p>
             </div>
           )}
+        </div>
+
+        {/* Dark Mode Toggle */}
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                {theme === 'dark' ? (
+                  <Sun className="w-5 h-5 text-warning" />
+                ) : (
+                  <Moon className="w-5 h-5 text-sleep" />
+                )}
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">Dark Mode</p>
+                <p className="text-xs text-muted-foreground">
+                  {theme === 'dark' ? 'Night theme active' : 'Switch to night theme'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={toggleTheme}
+              className={`relative w-12 h-7 rounded-full transition-colors ${
+                theme === 'dark' ? 'bg-accent' : 'bg-muted'
+              }`}
+            >
+              <div className={`absolute top-1 w-5 h-5 rounded-full bg-card shadow transition-transform ${
+                theme === 'dark' ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
         </div>
 
         {/* Life Event Quick Action */}
