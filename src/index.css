@@ -6,7 +6,7 @@
 
 @layer base {
   :root {
-    --background: 225 25% 97%;
+    --background: 230 25% 97%;
     --foreground: 230 40% 10%;
 
     --card: 0 0% 100%;
@@ -68,6 +68,66 @@
 
     --font-display: 'Fraunces', serif;
     --font-body: 'DM Sans', sans-serif;
+  }
+
+  .dark {
+    --background: 235 35% 8%;
+    --foreground: 225 20% 90%;
+
+    --card: 235 30% 12%;
+    --card-foreground: 225 20% 90%;
+
+    --popover: 235 30% 12%;
+    --popover-foreground: 225 20% 90%;
+
+    --primary: 258 55% 58%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 235 25% 18%;
+    --secondary-foreground: 225 20% 85%;
+
+    --muted: 235 20% 16%;
+    --muted-foreground: 225 15% 55%;
+
+    --accent: 258 55% 62%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 65% 48%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 235 20% 20%;
+    --input: 235 20% 20%;
+    --ring: 258 55% 58%;
+
+    /* Sleep-specific tokens (dark) */
+    --sleep: 258 50% 50%;
+    --sleep-foreground: 258 30% 92%;
+    --sleep-light: 258 35% 18%;
+    --wake: 155 45% 38%;
+    --wake-foreground: 155 30% 90%;
+    --warning: 38 85% 50%;
+    --warning-foreground: 38 90% 90%;
+    --warning-light: 38 40% 18%;
+    --crisis: 15 70% 50%;
+    --crisis-foreground: 0 0% 100%;
+    --crisis-light: 15 40% 15%;
+    --consistency: 200 65% 45%;
+    --consistency-foreground: 200 50% 90%;
+    --night-start: 235 60% 6%;
+    --night-mid: 250 50% 10%;
+    --night-end: 258 45% 14%;
+    --cognitive-low: 155 30% 16%;
+    --cognitive-medium: 38 30% 16%;
+    --cognitive-high: 0 30% 16%;
+
+    --sidebar-background: 235 30% 10%;
+    --sidebar-foreground: 225 20% 85%;
+    --sidebar-primary: 258 55% 58%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 235 25% 16%;
+    --sidebar-accent-foreground: 225 20% 85%;
+    --sidebar-border: 235 20% 18%;
+    --sidebar-ring: 258 55% 58%;
   }
 }
 
