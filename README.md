@@ -1,73 +1,343 @@
-# Welcome to your Lovable project
+# Luna - Sleep Guardian
 
-## Project info
+## App Summary
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+Luna is a comprehensive sleep optimization and task management application designed to help users protect their sleep schedule while managing their daily workload. The primary users are professionals and students who struggle to balance productivity with adequate rest. Luna intelligently alerts users when calendar events or tasks conflict with their designated sleep windows, provides personalized sleep recommendations, and tracks sleep consistency. By integrating task management with sleep protection, Luna helps users maintain healthy sleep patterns while staying productive, ultimately improving their well-being and daily performance.
 
-## How can I edit this code?
+## Tech Stack
 
-There are several ways of editing your application.
+### Frontend
+- **Framework**: React 18 with TypeScript
+- **Styling**: Tailwind CSS with custom design system
+- **Build Tool**: Vite
+- **State Management**: React Context API
+- **UI Components**: Custom shadcn/ui components
+- **Testing**: Vitest
 
-**Use Lovable**
+### Backend
+- **Runtime**: Node.js
+- **Framework**: Express.js
+- **Language**: JavaScript (ES Modules)
+- **Database Client**: pg (node-postgres)
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+### Database
+- **Database System**: PostgreSQL
+- **Hosting**: Local development instance
+- **Query Format**: SQL with parameterized queries for security
 
-Changes made via Lovable will be committed automatically to this repo.
+## Architecture Diagram
 
-**Use your preferred IDE**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         User's Browser                          │
+└────────────────────────────┬──────────────────────────────────────┘
+                             │
+                   HTTP/REST (Port 8080)
+                             │
+        ┌────────────────────▼────────────────────┐
+        │      Frontend (React + TypeScript)      │
+        │  - Tasks Page                           │
+        │  - Calendar Page                        │
+        │  - Sleep Analytics                      │
+        │  - Task Edit Modal                      │
+        └────────────────────┬────────────────────┘
+                             │
+                   HTTP/REST (Port 5001)
+                             │
+        ┌────────────────────▼────────────────────┐
+        │    Backend (Express.js)                 │
+        │  - API Routes                           │
+        │  - Database Queries                     │
+        │  - Business Logic                       │
+        │  - CORS Middleware                      │
+        └────────────────────┬────────────────────┘
+                             │
+                   PostgreSQL Connection
+                             │
+        ┌────────────────────▼────────────────────┐
+        │   PostgreSQL Database (luna)            │
+        │  - User                                 │
+        │  - Task                                 │
+        │  - SleepGoal                            │
+        │  - SleepWindow                          │
+        │  - CalendarEvent                        │
+        │  - SleepLog                             │
+        │  - And more...                          │
+        └─────────────────────────────────────────┘
+```
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+## Prerequisites
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+Before you begin, ensure you have the following installed on your system:
 
-Follow these steps:
+### Node.js
+- **Version**: 16.x or higher
+- **Install**: https://nodejs.org/
+- **Verify Installation**:
+  ```bash
+  node --version
+  npm --version
+  ```
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+### PostgreSQL
+- **Version**: 12 or higher
+- **Install**: https://www.postgresql.org/download/
+- **Verify Installation**:
+  ```bash
+  psql --version
+  ```
+- **Verify psql is in PATH** (should be able to run `psql` from any directory):
+  ```bash
+  which psql  # macOS/Linux
+  where psql  # Windows
+  ```
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+### Git (Optional but Recommended)
+- **Install**: https://git-scm.com/
+- **Verify Installation**:
+  ```bash
+  git --version
+  ```
 
-# Step 3: Install the necessary dependencies.
-npm i
+## Installation and Setup
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+### Step 1: Clone the Repository
+```bash
+git clone <repository-url>
+cd sleep-guardian
+```
+
+### Step 2: Install Frontend Dependencies
+```bash
+cd frontend
+npm install
+```
+
+### Step 3: Install Backend Dependencies
+```bash
+cd ../backend
+npm install
+```
+
+### Step 4: Create PostgreSQL Database
+Open a terminal and create the `luna` database:
+
+```bash
+psql -U postgres
+```
+
+Then in the PostgreSQL prompt:
+```sql
+CREATE DATABASE luna;
+\q
+```
+
+### Step 5: Load Database Schema
+From the root `sleep-guardian` directory, run:
+
+```bash
+psql -U postgres -d luna -f db/schema.sql
+```
+
+You should see output indicating all tables have been created successfully.
+
+### Step 6: Seed the Database
+Load sample data for testing:
+
+```bash
+psql -U postgres -d luna -f db/seed.sql
+```
+
+### Step 7: Configure Environment Variables
+
+#### Backend Configuration
+Navigate to the `backend` folder and create a `.env` file:
+
+```bash
+cd backend
+```
+
+Copy from the example file:
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and ensure it contains:
+```
+PORT=5001
+FRONTEND_URL=http://localhost:8080
+DB_USER=postgres
+DB_PASSWORD=DB_PASSWORD
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=luna
+```
+
+**Note**: Update `DB_PASSWORD` with your PostgreSQL password.
+
+## Running the Application
+
+### Terminal 1: Start the Backend Server
+```bash
+cd backend
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+Expected output:
+```
+✅ Successfully connected to PostgreSQL database
+🚀 Server is running on http://localhost:5001
+```
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### Terminal 2: Start the Frontend Development Server
+```bash
+cd frontend
+npm run dev
+```
 
-**Use GitHub Codespaces**
+Expected output:
+```
+VITE v4.x.x ready in xxx ms
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+➜  Local:   http://localhost:8080/
+```
 
-## What technologies are used for this project?
+### Open in Browser
+Navigate to `http://localhost:8080/` in your web browser.
 
-This project is built with:
+## Verifying the Vertical Slice: Task Editing Feature
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+This section demonstrates the complete task editing workflow, confirming that changes are persisted in the database and survive page refreshes.
 
-## How can I deploy this project?
+### Step 1: Navigate to the Tasks Page
+1. Open the application at `http://localhost:8080/`
+2. Click on "Tasks" in the navigation menu
+3. You should see a list of tasks organized in sections: Priority, Today, and Other
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+### Step 2: Edit a Task
+1. Click the **pencil icon** on any task (e.g., "Complete project report")
+2. A modal sheet will slide up from the bottom with the following editable fields:
+   - Title
+   - Notes
+   - Priority (Priority / Today / Other)
+   - Due Date (date and time picker)
+   - Duration (minutes)
+   - Status (Pending / In Progress / Completed)
 
-## Can I connect a custom domain to my Lovable project?
+### Step 3: Make Changes
+1. Change the task title (e.g., add " - UPDATED" to the title)
+2. Change the priority (select a different option from the dropdown)
+3. Change the due date using the date/time picker
+4. Click the **"Save"** button
 
-Yes, you can!
+Expected behavior:
+- A loading state appears briefly
+- The modal closes
+- The task list re-renders with the updated information
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+### Step 4: Verify Database Update
+In a new terminal, verify the changes were saved to the database:
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+```bash
+psql -U postgres -d luna
+```
+
+Then run this query to see the updated task:
+```sql
+SELECT task_id, title, priority, due_datetime, status FROM "Task" WHERE title LIKE '%UPDATED%' LIMIT 1;
+```
+
+You should see your changes reflected in the database output.
+
+### Step 5: Verify Persistence After Page Refresh
+1. Press **F5** or **Cmd+R** to refresh the page
+2. Wait for the page to load and data to fetch
+3. Navigate back to the Tasks page
+4. Verify that your changes are still present:
+   - The task title shows your update
+   - The task appears in the correct section based on priority and due date
+   - The duration, notes, and other fields reflect your changes
+
+**Success Criteria**:
+- ✅ Task can be edited via the UI modal
+- ✅ Changes are immediately visible in the task list
+- ✅ Database contains the updated values
+- ✅ Changes persist after page refresh
+- ✅ Task is correctly categorized in Priority/Today/Other sections based on new values
+
+### Troubleshooting
+
+**Tasks not appearing?**
+- Verify the backend is running and connecting to the database
+- Check that `npm run dev` was executed in the backend folder
+- Verify the database was seeded with `psql -U postgres -d luna -f db/seed.sql`
+
+**"Failed to fetch" error?**
+- Ensure the backend is running on port 5001
+- Check browser console (F12) for specific error messages
+- Verify CORS is enabled (it should be by default in Express)
+
+**Changes not saving?**
+- Check the browser console for network errors
+- Verify the backend terminal for any error messages
+- Ensure PostgreSQL is running and the `luna` database exists
+- Confirm the database credentials in `.env` are correct
+
+**Page doesn't refresh with changes?**
+- Close the application and restart both frontend and backend
+- Clear browser cache (Ctrl+Shift+Delete or Cmd+Shift+Delete)
+- Try in an incognito/private window
+
+## Additional Commands
+
+### Backend
+- **Production build**: `npm start`
+- **Development with watch**: `npm run dev`
+
+### Frontend
+- **Build for production**: `npm run build`
+- **Preview production build**: `npm run preview`
+- **Run tests**: `npm run test`
+
+### Database
+- **Connect to database**: `psql -U postgres -d luna`
+- **Backup database**: `pg_dump -U postgres luna > backup.sql`
+- **Restore database**: `psql -U postgres -d luna < backup.sql`
+
+## Project Structure
+
+```
+sleep-guardian/
+├── frontend/                 # React frontend application
+│   ├── src/
+│   │   ├── pages/           # Page components (Tasks, Calendar, etc.)
+│   │   ├── components/      # Reusable UI components
+│   │   ├── contexts/        # React Context for state management
+│   │   └── lib/             # Utilities
+│   └── package.json
+├── backend/                  # Express backend server
+│   ├── index.js            # Main server file
+│   ├── db.js               # Database connection
+│   ├── queries.js          # Database query functions
+│   ├── .env                # Environment variables (local)
+│   ├── .env.example        # Environment variables template
+│   └── package.json
+├── db/                      # Database files
+│   ├── schema.sql          # Database schema and table definitions
+│   └── seed.sql            # Sample data for testing
+└── README.md               # This file
+```
+
+## Future Enhancements
+
+- User authentication and authorization
+- Sleep analytics and recommendations
+- Calendar integration
+- Push notifications for sleep reminders
+- Mobile app version
+- Dark mode theme toggle
+- Export sleep data to CSV
+
+## Support
+
+For issues or questions, please refer to the troubleshooting section above or review the application logs in the terminal windows where the frontend and backend are running.
