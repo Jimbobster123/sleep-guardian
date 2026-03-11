@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import pool, { testConnection } from './db.js';
 import { getUserTasks, getAllUsers, getUserById, updateTask } from './queries.js';
+import authRoutes from './routes/auth.js';
+import meRoutes from './routes/me.js';
 
 dotenv.config();
 
@@ -10,7 +12,12 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || true,
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 app.use(express.json());
 
 // Health check route
@@ -81,6 +88,10 @@ app.get('/api/example', (req, res) => {
   res.json({ message: 'This is an example endpoint' });
 });
 
+// Auth + current-user routes
+app.use('/api/auth', authRoutes);
+app.use('/api/me', meRoutes);
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
@@ -106,4 +117,3 @@ async function start() {
 }
 
 start();
-

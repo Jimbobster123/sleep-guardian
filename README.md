@@ -141,14 +141,23 @@ psql -U postgres -d luna -f db/schema.sql
 
 You should see output indicating all tables have been created successfully.
 
-### Step 6: Seed the Database
+### Step 6: Run Migrations
+This repo includes incremental migrations for newer features (auth sessions, sleep-goal modes, calendar import metadata).
+
+```bash
+psql -U postgres -d luna -f db/migrations/001_auth_calendar_sleepgoal.sql
+```
+
+### Step 7: Seed the Database
 Load sample data for testing:
 
 ```bash
 psql -U postgres -d luna -f db/seed.sql
 ```
 
-### Step 7: Configure Environment Variables
+> Note: Seed users include placeholder password hashes and are not intended for logging in. Create a new account in the UI for authentication.
+
+### Step 8: Configure Environment Variables
 
 #### Backend Configuration
 Navigate to the `backend` folder and create a `.env` file:
@@ -171,9 +180,16 @@ DB_PASSWORD=DB_PASSWORD
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=luna
+SESSION_TTL_DAYS=30
 ```
 
 **Note**: Update `DB_PASSWORD` with your PostgreSQL password.
+
+#### Frontend Configuration (Optional)
+By default the frontend calls `http://localhost:5001`. To override, create `frontend/.env`:
+```
+VITE_API_BASE_URL=http://localhost:5001
+```
 
 ## Running the Application
 
@@ -204,6 +220,14 @@ VITE v4.x.x ready in xxx ms
 
 ### Open in Browser
 Navigate to `http://localhost:8080/` in your web browser.
+
+## Features Added
+- **Login/Signup**: Create an account and log in (session token stored in localStorage).
+- **Sleep Goal Setup**: On first login, you must choose one: set bedtime, set wake time, or set sleep amount, with different times per day.
+- **Profile Page**: Update profile + sleep goal settings at `/profile`.
+- **Calendar in DB**: Calendar page reads events from the database.
+- **Google Calendar Import**: Export Google Calendar as `.ics` and import it on the Profile page.
+- **Schedule Suggestions**: Calendar page can suggest shifts (either move events outside a fixed sleep window, or move the sleep window to fit a fixed-duration goal).
 
 ## Verifying the Vertical Slice: Task Editing Feature
 

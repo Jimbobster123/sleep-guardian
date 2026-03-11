@@ -1,0 +1,29 @@
+<svg width="520" height="160" viewBox="0 0 520 160" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="520" height="160" fill="#0f1226" rx="30"></rect>
+
+  <!-- Crescent moon -->
+  <path d="M120 30
+           A60 60 0 1 0 120 130
+           A45 60 0 1 1 120 30" fill="#c9c6ff"></path>
+
+  <!-- Sleeping head -->
+  <circle cx="92" cy="92" r="9" fill="#ffffff"></circle>
+
+  <!-- Body -->
+  <path d="M80 100 Q100 115 120 105" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round"></path>
+
+  <!-- Zzz -->
+  <text x="110" y="60" font-size="14" fill="#c9c6ff" font-family="sans-serif">Z</text>
+  <text x="122" y="48" font-size="12" fill="#c9c6ff" font-family="sans-serif">z</text>
+
+  <!-- App name -->
+  <text x="210" y="95" font-size="56" fill="#ffffff" font-family="sans-serif" letter-spacing="6" font-weight="600">
+        LUNA
+  </text>
+
+  <!-- subtle stars -->
+  <circle cx="450" cy="50" r="2" fill="#c9c6ff"></circle>
+  <circle cx="480" cy="80" r="1.8" fill="#c9c6ff"></circle>
+  <circle cx="430" cy="100" r="1.5" fill="#c9c6ff"></circle>
+</svg>

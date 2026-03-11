@@ -3,11 +3,13 @@ import { useApp } from '@/contexts/AppContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useNavigate } from 'react-router-dom';
 import { User, Settings, Moon, Sun, Bell, HelpCircle, LogOut, ChevronRight, Zap } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 const MenuPage = () => {
   const { crisisMode, setCrisisMode } = useApp();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
   const navItems = [
     { label: 'Home', path: '/' },
@@ -17,9 +19,9 @@ const MenuPage = () => {
   ];
 
   const settingsItems = [
-    { icon: User, label: 'Profile' },
+    { icon: User, label: 'Profile', onClick: () => navigate('/profile') },
     { icon: Bell, label: 'Notifications' },
-    { icon: Moon, label: 'Sleep Settings' },
+    { icon: Moon, label: 'Sleep Settings', onClick: () => navigate('/profile') },
     { icon: Settings, label: 'Preferences' },
     { icon: HelpCircle, label: 'Help & Support' },
   ];
@@ -128,9 +130,10 @@ const MenuPage = () => {
 
         {/* Settings */}
         <div className="bg-card rounded-xl shadow-sm border border-border/50 overflow-hidden">
-          {settingsItems.map(({ icon: Icon, label }) => (
+          {settingsItems.map(({ icon: Icon, label, onClick }) => (
             <button
               key={label}
+              onClick={onClick}
               className="w-full flex items-center gap-3 px-4 py-3 border-b border-border/30 last:border-0 hover:bg-muted/50 transition-colors"
             >
               <Icon className="w-4.5 h-4.5 text-muted-foreground" />
@@ -143,13 +146,20 @@ const MenuPage = () => {
         {/* User */}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
-            <span className="text-sm font-semibold text-accent">RP</span>
+            <span className="text-sm font-semibold text-accent">
+              {(user?.first_name?.[0] || user?.email?.[0] || 'U').toUpperCase()}
+              {(user?.last_name?.[0] || '').toUpperCase()}
+            </span>
           </div>
           <div className="flex-1">
-            <p className="text-sm font-medium text-foreground">Rachel Pinkney</p>
-            <p className="text-xs text-muted-foreground">rachel.p@university.edu</p>
+            <p className="text-sm font-medium text-foreground">
+              {[user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Your account'}
+            </p>
+            <p className="text-xs text-muted-foreground">{user?.email}</p>
           </div>
-          <LogOut className="w-4.5 h-4.5 text-muted-foreground" />
+          <button onClick={logout} aria-label="Log out">
+            <LogOut className="w-4.5 h-4.5 text-muted-foreground" />
+          </button>
         </div>
       </div>
     </div>

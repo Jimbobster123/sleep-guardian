@@ -5,6 +5,8 @@ import TimeBudgetBar from '@/components/TimeBudgetBar';
 import { Plus } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { useEffect, useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+import { apiJson } from '@/lib/api';
 
 interface Task {
   task_id: string;
@@ -18,23 +20,20 @@ interface Task {
 
 const Tasks = () => {
   const { crisisMode } = useApp();
+  const { token } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
 
-  // Using the first user's ID from the seed data (Alex Johnson)
-  const userId = '550e8400-e29b-41d4-a716-446655440001';
-
   useEffect(() => {
+    if (!token) return;
     fetchTasks();
-  }, []);
+  }, [token]);
 
   const fetchTasks = async () => {
     try {
-      const response = await fetch(`http://localhost:5001/api/users/${userId}/tasks`);
-      if (!response.ok) throw new Error('Failed to fetch tasks');
-      const data = await response.json();
+      const data = await apiJson<Task[]>('/api/me/tasks', { token: token || undefined });
       setTasks(data);
     } catch (err) {
       console.error('Error fetching tasks:', err);
@@ -46,11 +45,9 @@ const Tasks = () => {
 
   const handleSaveTask = async (updatedTask: Task) => {
     try {
-      const response = await fetch(`http://localhost:5001/api/tasks/${updatedTask.task_id}`, {
+      await apiJson(`/api/me/tasks/${updatedTask.task_id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        token: token || undefined,
         body: JSON.stringify({
           title: updatedTask.title,
           notes: updatedTask.notes,
@@ -60,8 +57,6 @@ const Tasks = () => {
           due_datetime: updatedTask.due_datetime,
         }),
       });
-      
-      if (!response.ok) throw new Error('Failed to update task');
       
       // Update local state
       setTasks(tasks.map(t => t.task_id === updatedTask.task_id ? updatedTask : t));
