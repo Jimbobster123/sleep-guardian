@@ -99,7 +99,73 @@ Before you begin, ensure you have the following installed on your system:
   git --version
   ```
 
-## Installation and Setup
+## Quick Start (Local)
+
+From the repo root (`sleep-guardian/`):
+
+### 1) Install dependencies
+```bash
+cd frontend && npm install
+cd ../backend && npm install
+```
+
+### 2) Ensure PostgreSQL is running
+You should be able to connect with `psql`:
+```bash
+psql --version
+psql -U postgres -d postgres -c "SELECT 1;"
+```
+If you don’t have a `postgres` role locally, replace `-U postgres` with your local Postgres role (often your macOS username).
+
+If that connection fails, start PostgreSQL using whatever you installed:
+- macOS (Homebrew): `brew services start postgresql` (or your installed version, e.g. `postgresql@16`)
+- Linux (systemd): `sudo systemctl start postgresql`
+
+### 3) Create/load the database (first-time setup)
+Create the `luna` database (skip if it already exists):
+```bash
+psql -U postgres -d postgres -c "CREATE DATABASE luna;"
+```
+If you get `ERROR:  database "luna" already exists`, that’s fine—continue.
+
+Load schema + migrations:
+```bash
+psql -U postgres -d luna -f db/schema.sql
+psql -U postgres -d luna -f db/migrations/001_auth_calendar_sleepgoal.sql
+```
+
+Optional: load sample data (only run once per database):
+```bash
+psql -U postgres -d luna -f db/seed.sql
+```
+
+If you see errors like `relation ... already exists` or `duplicate key value violates unique constraint`, it usually means you already loaded schema/seed data. You can safely skip that step, or do a reset (see “Resetting the DB” below).
+
+### 4) Configure backend environment
+In `backend/.env`, set your Postgres credentials (especially `DB_USER` + `DB_PASSWORD`) and confirm `DB_NAME=luna`.
+
+If you don’t have a local `backend/.env` yet:
+```bash
+cd backend
+cp .env.example .env
+```
+
+### 5) Run the app
+Terminal 1 (backend):
+```bash
+cd backend
+npm run dev
+```
+Check: `http://localhost:5001/api/db-health`
+
+Terminal 2 (frontend):
+```bash
+cd frontend
+npm run dev
+```
+Open: `http://localhost:8080/`
+
+## Installation and Setup (Detailed)
 
 ### Step 1: Clone the Repository
 ```bash
@@ -154,6 +220,8 @@ Load sample data for testing:
 ```bash
 psql -U postgres -d luna -f db/seed.sql
 ```
+
+If you run `db/seed.sql` more than once, you will likely see `duplicate key` errors because the seed file inserts fixed UUIDs. If you want a clean slate, reset the database (see “Resetting the DB” below).
 
 > Note: Seed users include placeholder password hashes and are not intended for logging in. Create a new account in the UI for authentication.
 
@@ -220,6 +288,19 @@ VITE v4.x.x ready in xxx ms
 
 ### Open in Browser
 Navigate to `http://localhost:8080/` in your web browser.
+
+## Resetting the DB (Optional)
+
+Use this only if you want to wipe your local `luna` database and re-load schema + seed data.
+
+```bash
+psql -U postgres -d postgres -c "DROP DATABASE IF EXISTS luna;"
+psql -U postgres -d postgres -c "CREATE DATABASE luna;"
+psql -U postgres -d luna -f db/schema.sql
+psql -U postgres -d luna -f db/migrations/001_auth_calendar_sleepgoal.sql
+psql -U postgres -d luna -f db/seed.sql
+```
+If your local Postgres role is not `postgres`, replace `-U postgres` with the role you use to connect.
 
 ## Features Added
 - **Login/Signup**: Create an account and log in (session token stored in localStorage).
