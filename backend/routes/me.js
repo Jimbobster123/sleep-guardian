@@ -19,6 +19,16 @@ import {
 
 const router = express.Router();
 
+const VALID_GOAL_TYPES = new Set(['fixed_bedtime', 'fixed_wake_time', 'fixed_duration']);
+
+function isValidTimeString(value) {
+  return typeof value === 'string' && /^\d{2}:\d{2}:\d{2}$/.test(value);
+}
+
+function isNullableTimeString(value) {
+  return value === null || value === undefined || isValidTimeString(value);
+}
+
 router.get('/', requireAuth, async (req, res) => {
   res.json({ user: req.user });
 });
@@ -45,13 +55,52 @@ router.get('/sleep-goal', requireAuth, async (req, res) => {
 
 router.put('/sleep-goal', requireAuth, async (req, res) => {
   try {
-    const { goal_type, target_sleep_minutes, bedtime_flex_minutes, windows } = req.body || {};
-    if (typeof goal_type !== 'string') return res.status(400).json({ error: 'goal_type is required' });
+    const { goal_type, target_sleep_minutes, target_bedtime, target_wake_time, bedtime_flex_minutes, windows } = req.body || {};
+    if (typeof goal_type !== 'string' || !VALID_GOAL_TYPES.has(goal_type)) {
+      return res.status(400).json({ error: 'goal_type must be one of fixed_bedtime, fixed_wake_time, or fixed_duration' });
+    }
+
+    if (!isNullableTimeString(target_bedtime)) {
+      return res.status(400).json({ error: 'target_bedtime must use HH:MM:SS format or be null' });
+    }
+
+    if (!isNullableTimeString(target_wake_time)) {
+      return res.status(400).json({ error: 'target_wake_time must use HH:MM:SS format or be null' });
+    }
+
+    if (!Number.isInteger(bedtime_flex_minutes) || bedtime_flex_minutes < 0) {
+      return res.status(400).json({ error: 'bedtime_flex_minutes must be a whole number greater than or equal to 0' });
+    }
+
+    if (goal_type === 'fixed_duration') {
+      if (!Number.isInteger(target_sleep_minutes) || target_sleep_minutes <= 0) {
+        return res.status(400).json({ error: 'target_sleep_minutes must be a whole number greater than 0 for fixed_duration' });
+      }
+    } else if (target_sleep_minutes !== null && target_sleep_minutes !== undefined) {
+      return res.status(400).json({ error: 'target_sleep_minutes must be null unless goal_type is fixed_duration' });
+    }
+
+    if (!Array.isArray(windows) || windows.length === 0) {
+      return res.status(400).json({ error: 'windows is required' });
+    }
+
+    for (const w of windows) {
+      if (!w) return res.status(400).json({ error: 'Each sleep window is required' });
+      const day = Number(w.day_of_week);
+      if (!Number.isInteger(day) || day < 0 || day > 6) {
+        return res.status(400).json({ error: 'Each sleep window day_of_week must be an integer from 0 to 6' });
+      }
+      if (!isValidTimeString(w.start_time) || !isValidTimeString(w.end_time)) {
+        return res.status(400).json({ error: 'Each sleep window time must use HH:MM:SS format' });
+      }
+    }
 
     const goal = await createOrUpdateSleepGoal(req.user.user_id, {
       goal_type,
       target_sleep_minutes: target_sleep_minutes ?? null,
-      bedtime_flex_minutes: bedtime_flex_minutes ?? null,
+      target_bedtime: target_bedtime ?? null,
+      target_wake_time: target_wake_time ?? null,
+      bedtime_flex_minutes,
     });
 
     const upserted = [];
