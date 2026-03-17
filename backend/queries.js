@@ -35,6 +35,102 @@ export async function getTaskById(taskId) {
   }
 }
 
+export async function createTask(userId, task) {
+  const {
+    title,
+    notes,
+    priority,
+    status,
+    estimated_minutes,
+    due_datetime,
+  } = task || {};
+
+  if (typeof title !== 'string' || !title.trim()) {
+    throw new Error('Title is required');
+  }
+
+  const prio = Number.isFinite(priority) ? priority : 3;
+  const estMinutes = Number.isFinite(estimated_minutes) ? estimated_minutes : 0;
+  const safeStatus = typeof status === 'string' && status.trim().length > 0 ? status : 'pending';
+
+  const result = await pool.query(
+    `INSERT INTO "Task" (user_id, title, notes, priority, status, estimated_minutes, due_datetime)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [
+      userId,
+      title.trim(),
+      asNullIfEmpty(notes),
+      prio,
+      safeStatus,
+      estMinutes,
+      due_datetime || null,
+    ]
+  );
+
+  return result.rows[0];
+}
+
+export async function upsertTaskCalendarEvent(userId, task) {
+  if (!task || !task.task_id) return null;
+
+  const minutes = Number(task.estimated_minutes || 0);
+  if (!task.due_datetime || !minutes) return null;
+
+  const start = new Date(task.due_datetime);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = new Date(start.getTime() + minutes * 60 * 1000);
+
+  const existing = await pool.query(
+    `SELECT event_id FROM "CalendarEvent"
+     WHERE user_id = $1 AND task_id = $2
+     LIMIT 1`,
+    [userId, task.task_id]
+  );
+
+  if (existing.rows[0]) {
+    const result = await pool.query(
+      `UPDATE "CalendarEvent"
+       SET title = $3,
+           description = $4,
+           start_datetime = $5,
+           end_datetime = $6,
+           status = $7
+       WHERE event_id = $1 AND user_id = $2
+       RETURNING *`,
+      [
+        existing.rows[0].event_id,
+        userId,
+        asNullIfEmpty(task.title),
+        asNullIfEmpty(task.notes),
+        start,
+        end,
+        asNullIfEmpty(task.status) || 'scheduled',
+      ]
+    );
+    return result.rows[0];
+  }
+
+  const result = await pool.query(
+    `INSERT INTO "CalendarEvent"
+     (user_id, task_id, title, description, start_datetime, end_datetime, status, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING *`,
+    [
+      userId,
+      task.task_id,
+      asNullIfEmpty(task.title),
+      asNullIfEmpty(task.notes),
+      start,
+      end,
+      asNullIfEmpty(task.status) || 'scheduled',
+      'task',
+    ]
+  );
+
+  return result.rows[0];
+}
+
 // Get all users
 export async function getAllUsers() {
   try {

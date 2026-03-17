@@ -2,7 +2,7 @@ import { X } from 'lucide-react';
 import { useState } from 'react';
 
 interface Task {
-  task_id: string;
+  task_id?: string;
   title: string;
   notes?: string;
   priority: number;
@@ -13,11 +13,12 @@ interface Task {
 
 interface TaskEditModalProps {
   task: Task;
+  mode?: 'create' | 'edit';
   onClose: () => void;
   onSave: (updatedTask: Task) => Promise<void>;
 }
 
-const TaskEditModal = ({ task, onClose, onSave }: TaskEditModalProps) => {
+const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalProps) => {
   const [formData, setFormData] = useState<Task>(task);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,12 +43,28 @@ const TaskEditModal = ({ task, onClose, onSave }: TaskEditModalProps) => {
     }
   };
 
+  const toLocalInputValue = (value?: string) => {
+    if (!value) return '';
+    // If it's already a local datetime-local string, use it as-is
+    if (value.length === 16 && value.includes('T')) return value;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  };
+
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-end">
       <div className="w-full bg-background rounded-t-2xl p-6 shadow-xl animate-in slide-in-from-bottom">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-foreground">Edit Task</h2>
+          <h2 className="text-lg font-semibold text-foreground">
+            {mode === 'create' ? 'Add Task' : 'Edit Task'}
+          </h2>
           <button
             onClick={onClose}
             className="text-muted-foreground hover:text-foreground transition-colors"
@@ -101,8 +118,8 @@ const TaskEditModal = ({ task, onClose, onSave }: TaskEditModalProps) => {
             <label className="text-sm font-medium text-foreground mb-1 block">Due Date</label>
             <input
               type="datetime-local"
-              value={formData.due_datetime ? new Date(formData.due_datetime).toISOString().slice(0, 16) : ''}
-              onChange={(e) => handleChange('due_datetime', e.target.value ? new Date(e.target.value).toISOString() : null)}
+              value={toLocalInputValue(formData.due_datetime)}
+              onChange={(e) => handleChange('due_datetime', e.target.value || undefined)}
               className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
             />
           </div>
@@ -153,9 +170,9 @@ const TaskEditModal = ({ task, onClose, onSave }: TaskEditModalProps) => {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="flex-1 px-4 py-2 rounded-lg bg-accent text-accent-foreground hover:opacity-90 transition-opacity font-medium disabled:opacity-50"
+            className="flex-1 px-4 py-2 rounded-lg bg-accent text-white hover:opacity-90 transition-opacity font-semibold tracking-wide uppercase disabled:opacity-50"
           >
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? (mode === 'create' ? 'ADDING TASK…' : 'SAVING…') : mode === 'create' ? 'ADD TASK' : 'SAVE'}
           </button>
         </div>
       </div>
