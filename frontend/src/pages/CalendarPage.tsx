@@ -23,6 +23,18 @@ type DbEvent = {
   source: string | null;
 };
 
+function fmtPgLocal(ts?: string | null) {
+  if (!ts) return '';
+  // expects "YYYY-MM-DD HH:MM:SS"
+  const d = new Date(ts.replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return ts;
+  return format(d, 'MMM d, h:mm a');
+}
+
+function hourFloatFromDate(d: Date) {
+  return d.getHours() + d.getMinutes() / 60;
+}
+
 const CalendarPage = () => {
   const { token } = useAuth();
   const [day, setDay] = useState(() => new Date());
@@ -62,6 +74,23 @@ const CalendarPage = () => {
   }, [sleep, dow]);
 
   const sleepTimes = useMemo(() => {
+    // If we have a suggestion, shade the calendar using the suggested sleep window.
+    const suggestedStart = suggestions?.sleep_window?.start ? new Date(String(suggestions.sleep_window.start).replace(' ', 'T')) : null;
+    const suggestedEnd = suggestions?.sleep_window?.end ? new Date(String(suggestions.sleep_window.end).replace(' ', 'T')) : null;
+    if (
+      suggestedStart &&
+      suggestedEnd &&
+      !Number.isNaN(suggestedStart.getTime()) &&
+      !Number.isNaN(suggestedEnd.getTime())
+    ) {
+      return {
+        bedHour: hourFloatFromDate(suggestedStart),
+        wakeHour: hourFloatFromDate(suggestedEnd),
+        label: `${format(suggestedStart, 'HH:mm')} – ${format(suggestedEnd, 'HH:mm')}`,
+        source: 'suggested',
+      };
+    }
+
     const bed = String(windowForDay?.start_time || sleep?.goal?.target_bedtime || '23:00:00').slice(0, 5);
     const wake = String(windowForDay?.end_time || sleep?.goal?.target_wake_time || '07:00:00').slice(0, 5);
     const [bh, bm] = bed.split(':').map(Number);
@@ -70,8 +99,9 @@ const CalendarPage = () => {
       bedHour: (bh || 0) + (bm || 0) / 60,
       wakeHour: (wh || 0) + (wm || 0) / 60,
       label: `${bed} – ${wake}`,
+      source: 'saved',
     };
-  }, [windowForDay, sleep]);
+  }, [windowForDay, sleep, suggestions]);
 
   const getEventStyle = (source?: string | null) => {
     if (source === 'ics') return 'bg-cognitive-medium text-foreground';
@@ -108,7 +138,11 @@ const CalendarPage = () => {
         </div>
 
         <div className="flex items-center justify-between mb-3">
-          <p className="text-xs text-muted-foreground">Sleep window: <span className="text-foreground/80">{sleepTimes.label}</span></p>
+          <p className="text-xs text-muted-foreground">
+            Sleep window:{' '}
+            <span className="text-foreground/80">{sleepTimes.label}</span>
+            {sleepTimes.source === 'suggested' ? <span className="text-muted-foreground"> (suggested)</span> : null}
+          </p>
           <button
             onClick={async () => {
               if (!token) return;
@@ -124,6 +158,22 @@ const CalendarPage = () => {
             <Wand2 className="w-3.5 h-3.5" /> Suggest shifts
           </button>
         </div>
+
+        {/* Suggested sleep window (fixed_duration can move it) */}
+        {suggestions?.sleep_window?.start && suggestions?.sleep_window?.end ? (
+          <div className="mb-4 bg-card border border-border/50 rounded-xl p-3">
+            <p className="text-xs text-foreground font-medium mb-1">Suggested sleep window</p>
+            <p className="text-xs text-muted-foreground">
+              {fmtPgLocal(suggestions.sleep_window.start)} – {fmtPgLocal(suggestions.sleep_window.end)}
+              {suggestions?.moved_sleep_window ? (
+                <span className="text-muted-foreground"> (adjusted to fit your schedule)</span>
+              ) : null}
+            </p>
+            {suggestions?.warning ? (
+              <p className="text-xs text-muted-foreground mt-1">{String(suggestions.warning)}</p>
+            ) : null}
+          </div>
+        ) : null}
 
         {/* Day view */}
         <div className="bg-card rounded-xl shadow-sm border border-border/50 overflow-hidden">
@@ -175,11 +225,40 @@ const CalendarPage = () => {
             <p className="text-xs text-foreground font-medium mb-2">Conflicts ({suggestions.conflicts.length})</p>
             <div className="space-y-2">
               {suggestions.conflicts.slice(0, 6).map((c: any) => (
-                <div key={c.event_id} className="text-xs text-foreground/90">
-                  <span className="font-medium">{c.title || 'Event'}</span>{" "}
-                  <span className="text-muted-foreground">
-                    {c.suggested_start_datetime ? `→ ${c.suggested_start_datetime}–${c.suggested_end_datetime}` : "(no shift found)"}
-                  </span>
+                <div key={c.event_id} className="text-xs text-foreground/90 flex items-center gap-2">
+                  <div className="min-w-0">
+                    <span className="font-medium">{c.title || 'Event'}</span>{' '}
+                    <span className="text-muted-foreground">
+                      {c.suggested_start_datetime
+                        ? `→ ${fmtPgLocal(c.suggested_start_datetime)}–${fmtPgLocal(c.suggested_end_datetime)}`
+                        : '(no shift found)'}
+                    </span>
+                  </div>
+                  {c.suggested_start_datetime ? (
+                    <button
+                      className="ml-auto text-[11px] font-medium text-accent"
+                      onClick={async () => {
+                        if (!token) return;
+                        await apiJson(`/api/me/calendar-events/${encodeURIComponent(c.event_id)}`, {
+                          method: 'PUT',
+                          token,
+                          body: JSON.stringify({
+                            start_datetime: c.suggested_start_datetime,
+                            end_datetime: c.suggested_end_datetime,
+                          }),
+                        });
+
+                        // Refresh events for the current range
+                        const evRes = await apiJson<DbEvent[]>(
+                          `/api/me/calendar-events?from=${encodeURIComponent(`${dateStr} 00:00:00`)}&to=${encodeURIComponent(`${format(addDays(day, 2), 'yyyy-MM-dd')} 00:00:00`)}`,
+                          { token }
+                        );
+                        setEvents(evRes);
+                      }}
+                    >
+                      Apply
+                    </button>
+                  ) : null}
                 </div>
               ))}
               {suggestions.conflicts.length > 6 && <div className="text-xs text-muted-foreground">…and more</div>}
