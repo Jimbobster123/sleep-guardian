@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +17,9 @@ export default function Profile() {
   const [goal, setGoal] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [icsBusy, setIcsBusy] = useState(false);
+   const [googleBusy, setGoogleBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
   const [goalError, setGoalError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -36,6 +39,13 @@ export default function Profile() {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    const googleParam = searchParams.get("google");
+    if (googleParam === "connected") {
+      setMsg("Google Calendar connected.");
+    }
+  }, [searchParams]);
 
   const saveProfile = async () => {
     if (!token) return;
@@ -87,6 +97,44 @@ export default function Profile() {
       setMsg(`Imported ${res.imported} events.`);
     } finally {
       setIcsBusy(false);
+    }
+  };
+
+  const connectGoogle = async () => {
+    if (!token) {
+      setMsg("You must be logged in to connect Google Calendar.");
+      return;
+    }
+    setGoogleBusy(true);
+    setMsg(null);
+    try {
+      const res = await apiJson<{ url: string }>("/api/google/auth-url", { token });
+      window.location.href = res.url;
+    } catch (err: any) {
+      setMsg(err?.message || "Failed to connect Google Calendar.");
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
+
+  const syncGoogle = async () => {
+    if (!token) {
+      setMsg("You must be logged in to sync Google Calendar.");
+      return;
+    }
+    setGoogleBusy(true);
+    setMsg(null);
+    try {
+      const res = await apiJson<{ imported: number }>("/api/google/sync", {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
+      });
+      setMsg(`Synced ${res.imported} events from Google.`);
+    } catch (err: any) {
+      setMsg(err?.message || "Google sync failed.");
+    } finally {
+      setGoogleBusy(false);
     }
   };
 
@@ -145,6 +193,21 @@ export default function Profile() {
             busy={busy}
             submitError={goalError}
           />
+        </div>
+
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <h2 className="text-sm font-semibold text-foreground mb-2">Google Calendar</h2>
+          <p className="text-xs text-muted-foreground">
+            Connect your Google Calendar for automatic sync of events between Luna and Google.
+          </p>
+          <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <Button size="sm" onClick={connectGoogle} disabled={googleBusy}>
+              {googleBusy ? "Connecting..." : "Connect Google Calendar"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={syncGoogle} disabled={googleBusy}>
+              {googleBusy ? "Syncing..." : "Sync from Google"}
+            </Button>
+          </div>
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">

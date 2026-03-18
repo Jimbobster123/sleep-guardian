@@ -15,7 +15,9 @@ import {
   updateUserProfile,
   upsertImportedCalendarEvent,
   upsertSleepWindow,
+  getCalendarEventById,
 } from '../queries.js';
+import { pushLocalEventToGoogle, deleteGoogleEventForLocal } from '../google/calendar.js';
 
 const router = express.Router();
 
@@ -158,6 +160,9 @@ router.get('/calendar-events', requireAuth, async (req, res) => {
 router.post('/calendar-events', requireAuth, async (req, res) => {
   try {
     const created = await createCalendarEvent(req.user.user_id, req.body || {});
+    if (req.user.google_refresh_token) {
+      void pushLocalEventToGoogle({ user: req.user, event: created });
+    }
     res.json(created);
   } catch (err) {
     res.status(500).json({ error: 'Failed to create calendar event', details: err.message });
@@ -168,6 +173,9 @@ router.put('/calendar-events/:eventId', requireAuth, async (req, res) => {
   try {
     const updated = await updateCalendarEvent(req.user.user_id, req.params.eventId, req.body || {});
     if (!updated) return res.status(404).json({ error: 'Event not found' });
+    if (req.user.google_refresh_token) {
+      void pushLocalEventToGoogle({ user: req.user, event: updated });
+    }
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: 'Failed to update calendar event', details: err.message });
@@ -176,8 +184,12 @@ router.put('/calendar-events/:eventId', requireAuth, async (req, res) => {
 
 router.delete('/calendar-events/:eventId', requireAuth, async (req, res) => {
   try {
+    const existing = await getCalendarEventById(req.user.user_id, req.params.eventId);
     const deleted = await deleteCalendarEvent(req.user.user_id, req.params.eventId);
     if (!deleted) return res.status(404).json({ error: 'Event not found' });
+    if (existing && req.user.google_refresh_token) {
+      void deleteGoogleEventForLocal({ user: req.user, event: existing });
+    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete calendar event', details: err.message });

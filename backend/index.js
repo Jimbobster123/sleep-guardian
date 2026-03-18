@@ -5,6 +5,7 @@ import pool, { testConnection } from './db.js';
 import { getUserTasks, getAllUsers, getUserById, updateTask } from './queries.js';
 import authRoutes from './routes/auth.js';
 import meRoutes from './routes/me.js';
+import googleRoutes from './routes/google.js';
 
 dotenv.config();
 
@@ -91,6 +92,7 @@ app.get('/api/example', (req, res) => {
 // Auth + current-user routes
 app.use('/api/auth', authRoutes);
 app.use('/api/me', meRoutes);
+app.use('/api/google', googleRoutes);
 
 // 404 handler
 app.use((req, res) => {
