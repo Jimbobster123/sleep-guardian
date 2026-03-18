@@ -5,10 +5,12 @@ import { format, addDays, subDays } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
 
-const hours = Array.from({ length: 19 }, (_, i) => {
-  const h = i + 6;
+const hours = Array.from({ length: 24 }, (_, i) => {
+  // Start at 3 AM and wrap around to 2 AM
+  const h = (i + 3) % 24;
   const ampm = h >= 12 ? 'pm' : 'am';
-  const display = h > 12 ? h - 12 : h;
+  const raw = h % 12;
+  const display = raw === 0 ? 12 : raw;
   return { hour: h, label: `${display}:00 ${ampm}` };
 });
 

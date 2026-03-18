@@ -4,9 +4,11 @@ import { parseIcs } from '../import/ics.js';
 import { buildScheduleSuggestions } from '../schedule/suggestions.js';
 import {
   createOrUpdateSleepGoal,
+  createTask,
   createCalendarEvent,
   deleteCalendarEvent,
   getCalendarEvents,
+  getCalendarEventById,
   getActiveSleepGoal,
   getSleepWindows,
   getUserTasks,
@@ -15,7 +17,7 @@ import {
   updateUserProfile,
   upsertImportedCalendarEvent,
   upsertSleepWindow,
-  getCalendarEventById,
+  upsertTaskCalendarEvent,
 } from '../queries.js';
 import { pushLocalEventToGoogle, deleteGoogleEventForLocal } from '../google/calendar.js';
 
@@ -136,10 +138,24 @@ router.get('/tasks', requireAuth, async (req, res) => {
   }
 });
 
+router.post('/tasks', requireAuth, async (req, res) => {
+  try {
+    const created = await createTask(req.user.user_id, req.body || {});
+    await upsertTaskCalendarEvent(req.user.user_id, created);
+    res.status(201).json(created);
+  } catch (err) {
+    if (err instanceof Error && err.message === 'Title is required') {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: 'Failed to create task', details: err.message });
+  }
+});
+
 router.put('/tasks/:taskId', requireAuth, async (req, res) => {
   try {
     const updated = await updateTask(req.params.taskId, req.body || {});
     if (!updated || updated.user_id !== req.user.user_id) return res.status(404).json({ error: 'Task not found' });
+    await upsertTaskCalendarEvent(req.user.user_id, updated);
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: 'Failed to update task', details: err.message });

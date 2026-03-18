@@ -9,7 +9,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
 
 interface Task {
-  task_id: string;
+  task_id?: string;
   title: string;
   notes?: string;
   priority: number;
@@ -25,6 +25,7 @@ const Tasks = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [mode, setMode] = useState<'create' | 'edit'>('edit');
 
   useEffect(() => {
     if (!token) return;
@@ -45,21 +46,43 @@ const Tasks = () => {
 
   const handleSaveTask = async (updatedTask: Task) => {
     try {
-      await apiJson(`/api/me/tasks/${updatedTask.task_id}`, {
-        method: 'PUT',
-        token: token || undefined,
-        body: JSON.stringify({
-          title: updatedTask.title,
-          notes: updatedTask.notes,
-          priority: updatedTask.priority,
-          status: updatedTask.status,
-          estimated_minutes: updatedTask.estimated_minutes,
-          due_datetime: updatedTask.due_datetime,
-        }),
-      });
-      
-      // Update local state
-      setTasks(tasks.map(t => t.task_id === updatedTask.task_id ? updatedTask : t));
+      if (!token) throw new Error('Not authenticated');
+
+      if (!updatedTask.task_id) {
+        // Create
+        const created = await apiJson<Task>('/api/me/tasks', {
+          method: 'POST',
+          token,
+          body: JSON.stringify({
+            title: updatedTask.title,
+            notes: updatedTask.notes,
+            priority: updatedTask.priority,
+            status: updatedTask.status,
+            estimated_minutes: updatedTask.estimated_minutes,
+            due_datetime: updatedTask.due_datetime,
+          }),
+        });
+        setTasks((prev) => [...prev, created]);
+      } else {
+        // Update
+        await apiJson(`/api/me/tasks/${updatedTask.task_id}`, {
+          method: 'PUT',
+          token,
+          body: JSON.stringify({
+            title: updatedTask.title,
+            notes: updatedTask.notes,
+            priority: updatedTask.priority,
+            status: updatedTask.status,
+            estimated_minutes: updatedTask.estimated_minutes,
+            due_datetime: updatedTask.due_datetime,
+          }),
+        });
+
+        // Update local state
+        setTasks((prev) =>
+          prev.map((t) => (t.task_id === updatedTask.task_id ? updatedTask : t)),
+        );
+      }
     } catch (err) {
       console.error('Error saving task:', err);
       throw err;
@@ -192,7 +215,28 @@ const Tasks = () => {
         )}
 
         {/* FAB */}
-        <button className="fixed bottom-24 right-6 w-14 h-14 rounded-full bg-accent text-accent-foreground shadow-lg flex items-center justify-center hover:opacity-90 transition-opacity z-40">
+        <button
+          className="fixed bottom-24 right-6 w-14 h-14 rounded-full bg-accent text-accent-foreground shadow-lg flex items-center justify-center hover:opacity-90 transition-opacity z-40"
+          onClick={() => {
+            const now = new Date();
+            now.setMinutes(now.getMinutes() + 30 - (now.getMinutes() % 30));
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const defaultDue = `${year}-${month}-${day}T${hours}:${minutes}`;
+            setEditingTask({
+              title: '',
+              notes: '',
+              priority: 3,
+              status: 'pending',
+              estimated_minutes: 30,
+              due_datetime: defaultDue,
+            });
+            setMode('create');
+          }}
+        >
           <Plus className="w-6 h-6" />
         </button>
       </div>
@@ -201,6 +245,7 @@ const Tasks = () => {
       {editingTask && (
         <TaskEditModal
           task={editingTask}
+          mode={mode}
           onClose={() => setEditingTask(null)}
           onSave={handleSaveTask}
         />
