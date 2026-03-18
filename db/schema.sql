@@ -57,6 +57,7 @@ CREATE TABLE "Task" (
   user_id UUID NOT NULL,
   title VARCHAR(255) NOT NULL,
   notes TEXT,
+  planned_datetime TIMESTAMP,
   due_datetime TIMESTAMP,
   priority INTEGER,
   status VARCHAR(50),

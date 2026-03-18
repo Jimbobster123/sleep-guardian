@@ -13,9 +13,23 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 // Middleware
+const frontendOrigins = (process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Always allow common local dev origins (Vite may use localhost or 127.0.0.1).
+if (!frontendOrigins.includes('http://localhost:8080')) frontendOrigins.push('http://localhost:8080');
+if (!frontendOrigins.includes('http://127.0.0.1:8080')) frontendOrigins.push('http://127.0.0.1:8080');
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || true,
+    origin(origin, callback) {
+      // Allow non-browser tools (curl, server-to-server) that send no Origin header.
+      if (!origin) return callback(null, true);
+      if (frontendOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error(`CORS blocked origin: ${origin}`));
+    },
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );

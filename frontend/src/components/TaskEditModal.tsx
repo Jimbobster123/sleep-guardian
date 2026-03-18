@@ -7,6 +7,7 @@ interface Task {
   notes?: string;
   priority: number;
   status: string;
+  planned_datetime?: string;
   estimated_minutes: number;
   due_datetime?: string;
 }
@@ -20,10 +21,11 @@ interface TaskEditModalProps {
 
 const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalProps) => {
   const [formData, setFormData] = useState<Task>(task);
+  const [planned, setPlanned] = useState<boolean>(() => Boolean(task.planned_datetime));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleChange = (field: keyof Task, value: any) => {
+  const handleChange = (field: keyof Task, value: unknown) => {
     setFormData(prev => ({
       ...prev,
       [field]: value
@@ -34,7 +36,14 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalPr
     try {
       setSaving(true);
       setError(null);
-      await onSave(formData);
+      const payload: Task = planned
+        ? formData
+        : {
+            ...formData,
+            planned_datetime: undefined,
+            due_datetime: undefined,
+          };
+      await onSave(payload);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save task');
@@ -113,29 +122,67 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalPr
             </select>
           </div>
 
-          {/* Due Date */}
-          <div>
-            <label className="text-sm font-medium text-foreground mb-1 block">Due Date</label>
-            <input
-              type="datetime-local"
-              value={toLocalInputValue(formData.due_datetime)}
-              onChange={(e) => handleChange('due_datetime', e.target.value || undefined)}
-              className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-            />
+          {/* Planned time toggle */}
+          <div className="flex flex-col gap-1">
+            <label className="inline-flex items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                className="accent-accent"
+                checked={planned}
+                onChange={(e) => {
+                  const nextPlanned = e.target.checked;
+                  setPlanned(nextPlanned);
+                  if (!nextPlanned) {
+                    // Clear due date when unplanning so it won't appear on the calendar.
+                    setFormData(prev => ({ ...prev, planned_datetime: undefined, due_datetime: undefined }));
+                  }
+                }}
+              />
+              Planned time?
+            </label>
+            <p className="text-xs text-muted-foreground">
+              When checked, this task gets a specific time and due date and will appear on your calendar.
+            </p>
           </div>
 
-          {/* Estimated Minutes */}
-          <div>
-            <label className="text-sm font-medium text-foreground mb-1 block">Duration (minutes)</label>
-            <input
-              type="number"
-              value={formData.estimated_minutes}
-              onChange={(e) => handleChange('estimated_minutes', parseInt(e.target.value) || 0)}
-              className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-              placeholder="0"
-              min="0"
-            />
-          </div>
+          {planned && (
+            <>
+              {/* Planned Date & Time */}
+              <div>
+                <label className="text-sm font-medium text-foreground mb-1 block">Planned date &amp; time</label>
+                <input
+                  type="datetime-local"
+                  value={toLocalInputValue(formData.planned_datetime)}
+                  onChange={(e) => handleChange('planned_datetime', e.target.value || undefined)}
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </div>
+
+              {/* Due Date & Time (same underlying value, separate control) */}
+              <div>
+                <label className="text-sm font-medium text-foreground mb-1 block">Due date &amp; time</label>
+                <input
+                  type="datetime-local"
+                  value={toLocalInputValue(formData.due_datetime)}
+                  onChange={(e) => handleChange('due_datetime', e.target.value || undefined)}
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                />
+              </div>
+
+              {/* Estimated Minutes */}
+              <div>
+                <label className="text-sm font-medium text-foreground mb-1 block">Planned duration (minutes)</label>
+                <input
+                  type="number"
+                  value={formData.estimated_minutes}
+                  onChange={(e) => handleChange('estimated_minutes', parseInt(e.target.value, 10) || 0)}
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                  placeholder="0"
+                  min="0"
+                />
+              </div>
+            </>
+          )}
 
           {/* Status */}
           <div>

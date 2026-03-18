@@ -4,6 +4,7 @@ interface TaskItemProps {
   title: string;
   subtitle: string;
   duration?: number; // minutes
+  plannedDate?: string; // formatted date string like "Feb 20, 3:00 PM"
   dueDate?: string; // formatted date string like "Feb 20"
   completed?: boolean;
   nearBedtime?: boolean;
@@ -11,7 +12,17 @@ interface TaskItemProps {
   taskId?: string;
 }
 
-const TaskItem = ({ title, subtitle, duration, dueDate, completed, nearBedtime, onEdit, taskId }: TaskItemProps) => {
+const TaskItem = ({
+  title,
+  subtitle,
+  duration,
+  plannedDate,
+  dueDate,
+  completed,
+  nearBedtime,
+  onEdit,
+  taskId,
+}: TaskItemProps) => {
   return (
     <div className={`flex items-center gap-3 py-3 px-1 border-b border-border/50 last:border-0 ${
       nearBedtime ? 'bg-warning-light rounded-lg px-3 -mx-2' : ''
@@ -28,7 +39,8 @@ const TaskItem = ({ title, subtitle, duration, dueDate, completed, nearBedtime, 
         </p>
         <div className="flex items-center gap-2">
           <p className="text-xs text-muted-foreground">{subtitle}</p>
-          {dueDate && <p className="text-xs text-muted-foreground">• {dueDate}</p>}
+          {plannedDate && <p className="text-xs text-muted-foreground">• Planned: {plannedDate}</p>}
+          {dueDate && <p className="text-xs text-muted-foreground">• Due: {dueDate}</p>}
         </div>
       </div>
       {duration && (

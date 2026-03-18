@@ -61,7 +61,7 @@ Open `backend/.env` and update `DB_PASSWORD` with your PostgreSQL password. If y
 
 ```
 PORT=5001
-FRONTEND_URL=http://localhost:8080
+FRONTEND_URL=http://localhost:8080,http://127.0.0.1:8080
 DB_USER=postgres
 DB_PASSWORD=your_password_here
 DB_HOST=localhost
@@ -74,9 +74,9 @@ SESSION_TTL_DAYS=30
 
 ## Running the App
 
-You need two terminals open at the same time.
+You need two terminals open at the same time, both started **from inside the correct folder**.
 
-**Terminal 1 — Backend:**
+**Terminal 1 — Backend (from project root):**
 ```bash
 cd backend
 npm run dev
@@ -87,13 +87,13 @@ Expected output:
 🚀 Server is running on http://localhost:5001
 ```
 
-**Terminal 2 — Frontend:**
+**Terminal 2 — Frontend (from project root):**
 ```bash
 cd frontend
 npm run dev
 ```
 
-Open **http://localhost:8080/** in your browser.
+Open **http://localhost:8080/** in your browser. If that does not load, try **http://127.0.0.1:8080/**.
 
 Verify the backend is healthy: **http://localhost:5001/api/db-health**
 

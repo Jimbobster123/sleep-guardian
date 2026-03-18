@@ -11,6 +11,7 @@ import {
   getCalendarEventById,
   getActiveSleepGoal,
   getSleepWindows,
+  getTaskById,
   getUserTasks,
   updateCalendarEvent,
   updateTask,
@@ -148,6 +149,18 @@ router.post('/tasks', requireAuth, async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: 'Failed to create task', details: err.message });
+  }
+});
+
+router.get('/tasks/:taskId', requireAuth, async (req, res) => {
+  try {
+    const task = await getTaskById(req.params.taskId);
+    if (!task || task.user_id !== req.user.user_id) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch task', details: err.message });
   }
 });
 

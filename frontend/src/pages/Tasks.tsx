@@ -15,7 +15,15 @@ interface Task {
   priority: number;
   status: string;
   estimated_minutes: number;
+  planned_datetime?: string;
   due_datetime?: string;
+}
+
+function formatDateTime(dateString: string | undefined) {
+  if (!dateString) return undefined;
+  const d = new Date(dateString);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 const Tasks = () => {
@@ -58,6 +66,7 @@ const Tasks = () => {
             notes: updatedTask.notes,
             priority: updatedTask.priority,
             status: updatedTask.status,
+            planned_datetime: updatedTask.planned_datetime,
             estimated_minutes: updatedTask.estimated_minutes,
             due_datetime: updatedTask.due_datetime,
           }),
@@ -73,6 +82,7 @@ const Tasks = () => {
             notes: updatedTask.notes,
             priority: updatedTask.priority,
             status: updatedTask.status,
+            planned_datetime: updatedTask.planned_datetime,
             estimated_minutes: updatedTask.estimated_minutes,
             due_datetime: updatedTask.due_datetime,
           }),
@@ -89,33 +99,44 @@ const Tasks = () => {
     }
   };
 
-  // Helper function to check if a date is today
-  const isToday = (dateString: string | undefined) => {
-    if (!dateString) return false;
-    const taskDate = new Date(dateString);
-    const today = new Date();
-    return (
-      taskDate.getFullYear() === today.getFullYear() &&
-      taskDate.getMonth() === today.getMonth() &&
-      taskDate.getDate() === today.getDate()
-    );
-  };
+  const now = new Date();
 
-  // Helper function to format date
-  const formatDate = (dateString: string | undefined) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
+  const visibleTasks = tasks.filter((t) => t.status !== 'completed');
 
-  // Group tasks by priority and due date
-  const priorityTasks = tasks.filter(t => t.priority === 1 && t.status !== 'completed');
-  const todayTasks = tasks.filter(t => isToday(t.due_datetime) && t.status !== 'completed');
-  const otherTasks = tasks.filter(t => !isToday(t.due_datetime) && t.due_datetime && t.status !== 'completed')
+  // Priority tasks (priority=1), sorted by planned date.
+  const priorityTasks = visibleTasks
+    .filter((t) => t.priority === 1)
     .sort((a, b) => {
-      const dateA = new Date(a.due_datetime || '');
-      const dateB = new Date(b.due_datetime || '');
-      return dateA.getTime() - dateB.getTime();
+      const aPlanned = a.planned_datetime ? new Date(a.planned_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+      const bPlanned = b.planned_datetime ? new Date(b.planned_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+      return aPlanned - bPlanned;
+    });
+
+  // Future: tasks with a due date in the future, sorted by planned date.
+  const futureTasks = visibleTasks
+    .filter((t) => t.due_datetime && new Date(t.due_datetime).getTime() >= now.getTime())
+    .sort((a, b) => {
+      const aPlanned = a.planned_datetime ? new Date(a.planned_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+      const bPlanned = b.planned_datetime ? new Date(b.planned_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+      return aPlanned - bPlanned;
+    });
+
+  // Other: tasks without a due date (no due_datetime)
+  const otherTasks = visibleTasks
+    .filter((t) => !t.due_datetime)
+    .sort((a, b) => {
+      const aPlanned = a.planned_datetime ? new Date(a.planned_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+      const bPlanned = b.planned_datetime ? new Date(b.planned_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+      return aPlanned - bPlanned;
+    });
+
+  // Past: tasks with a due date in the past.
+  const pastTasks = visibleTasks
+    .filter((t) => t.due_datetime && new Date(t.due_datetime).getTime() < now.getTime())
+    .sort((a, b) => {
+      const aPlanned = a.planned_datetime ? new Date(a.planned_datetime).getTime() : new Date(a.due_datetime || 0).getTime();
+      const bPlanned = b.planned_datetime ? new Date(b.planned_datetime).getTime() : new Date(b.due_datetime || 0).getTime();
+      return bPlanned - aPlanned; // most recent planned first
     });
 
   const totalEstimatedMinutes = tasks.reduce((sum, t) => sum + (t.estimated_minutes || 0), 0);
@@ -161,58 +182,89 @@ const Tasks = () => {
           </div>
         )}
 
-        {/* Priority Section */}
-        {priorityTasks.length > 0 && (
-          <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
-            <h2 className="text-sm font-semibold text-foreground mb-2">Priority</h2>
-            {priorityTasks.map(task => (
+        {/* Priority Tasks */}
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <h2 className="text-sm font-semibold text-foreground mb-2">Priority Tasks</h2>
+          {priorityTasks.length > 0 ? (
+            priorityTasks.map((task) => (
               <TaskItem
                 key={task.task_id}
                 title={task.title}
                 subtitle={task.notes || 'Work'}
                 duration={task.estimated_minutes}
-                dueDate={task.due_datetime ? formatDate(task.due_datetime) : undefined}
+                plannedDate={formatDateTime(task.planned_datetime)}
+                dueDate={formatDateTime(task.due_datetime)}
                 completed={task.status === 'completed'}
                 onEdit={() => setEditingTask(task)}
               />
-            ))}
-          </div>
-        )}
+            ))
+          ) : (
+            <p className="text-xs text-muted-foreground">No priority tasks.</p>
+          )}
+        </div>
 
-        {/* Today Section */}
-        {todayTasks.length > 0 && (
-          <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
-            <h2 className="text-sm font-semibold text-foreground mb-2">Today</h2>
-            {todayTasks.map(task => (
+        {/* Future Tasks */}
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <h2 className="text-sm font-semibold text-foreground mb-2">Future Tasks</h2>
+          {futureTasks.length > 0 ? (
+            futureTasks.map((task) => (
               <TaskItem
                 key={task.task_id}
                 title={task.title}
                 subtitle={task.notes || 'Work'}
                 duration={task.estimated_minutes}
+                plannedDate={formatDateTime(task.planned_datetime)}
+                dueDate={formatDateTime(task.due_datetime)}
                 completed={task.status === 'completed'}
                 onEdit={() => setEditingTask(task)}
               />
-            ))}
-          </div>
-        )}
+            ))
+          ) : (
+            <p className="text-xs text-muted-foreground">No future tasks.</p>
+          )}
+        </div>
 
-        {/* Other Section */}
-        {otherTasks.length > 0 && (
-          <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
-            <h2 className="text-sm font-semibold text-foreground mb-2">Other</h2>
-            {otherTasks.map(task => (
+        {/* Other Tasks (no due date) */}
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <h2 className="text-sm font-semibold text-foreground mb-2">Other Tasks</h2>
+          {otherTasks.length > 0 ? (
+            otherTasks.map((task) => (
               <TaskItem
                 key={task.task_id}
                 title={task.title}
                 subtitle={task.notes || 'Work'}
                 duration={task.estimated_minutes}
-                dueDate={task.due_datetime ? formatDate(task.due_datetime) : undefined}
+                plannedDate={formatDateTime(task.planned_datetime)}
+                dueDate={undefined}
                 completed={task.status === 'completed'}
                 onEdit={() => setEditingTask(task)}
               />
-            ))}
-          </div>
-        )}
+            ))
+          ) : (
+            <p className="text-xs text-muted-foreground">No other tasks.</p>
+          )}
+        </div>
+
+        {/* Past Tasks */}
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <h2 className="text-sm font-semibold text-foreground mb-2">Past Tasks</h2>
+          {pastTasks.length > 0 ? (
+            pastTasks.map((task) => (
+              <TaskItem
+                key={task.task_id}
+                title={task.title}
+                subtitle={task.notes || 'Work'}
+                duration={task.estimated_minutes}
+                plannedDate={formatDateTime(task.planned_datetime)}
+                dueDate={formatDateTime(task.due_datetime)}
+                completed={task.status === 'completed'}
+                onEdit={() => setEditingTask(task)}
+              />
+            ))
+          ) : (
+            <p className="text-xs text-muted-foreground">No past tasks.</p>
+          )}
+        </div>
 
         {/* FAB */}
         <button
@@ -232,6 +284,7 @@ const Tasks = () => {
               priority: 3,
               status: 'pending',
               estimated_minutes: 30,
+              planned_datetime: defaultDue,
               due_datetime: defaultDue,
             });
             setMode('create');

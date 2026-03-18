@@ -41,6 +41,7 @@ export async function createTask(userId, task) {
     notes,
     priority,
     status,
+    planned_datetime,
     estimated_minutes,
     due_datetime,
   } = task || {};
@@ -54,8 +55,8 @@ export async function createTask(userId, task) {
   const safeStatus = typeof status === 'string' && status.trim().length > 0 ? status : 'pending';
 
   const result = await pool.query(
-    `INSERT INTO "Task" (user_id, title, notes, priority, status, estimated_minutes, due_datetime)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
     [
       userId,
@@ -63,6 +64,7 @@ export async function createTask(userId, task) {
       asNullIfEmpty(notes),
       prio,
       safeStatus,
+      planned_datetime || null,
       estMinutes,
       due_datetime || null,
     ]
@@ -75,60 +77,136 @@ export async function upsertTaskCalendarEvent(userId, task) {
   if (!task || !task.task_id) return null;
 
   const minutes = Number(task.estimated_minutes || 0);
-  if (!task.due_datetime || !minutes) return null;
+  const plannedStart = task.planned_datetime ? new Date(task.planned_datetime) : null;
+  const dueStart = task.due_datetime ? new Date(task.due_datetime) : null;
 
-  const start = new Date(task.due_datetime);
-  if (Number.isNaN(start.getTime())) return null;
-  const end = new Date(start.getTime() + minutes * 60 * 1000);
+  let plannedUpdated = null;
+  let dueUpdated = null;
 
-  const existing = await pool.query(
-    `SELECT event_id FROM "CalendarEvent"
-     WHERE user_id = $1 AND task_id = $2
-     LIMIT 1`,
-    [userId, task.task_id]
+  // Cleanup legacy combined task event entries (source='task').
+  await pool.query(
+    `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
+    [userId, task.task_id, 'task']
   );
 
-  if (existing.rows[0]) {
-    const result = await pool.query(
-      `UPDATE "CalendarEvent"
-       SET title = $3,
-           description = $4,
-           start_datetime = $5,
-           end_datetime = $6,
-           status = $7
-       WHERE event_id = $1 AND user_id = $2
-       RETURNING *`,
-      [
-        existing.rows[0].event_id,
-        userId,
-        asNullIfEmpty(task.title),
-        asNullIfEmpty(task.notes),
-        start,
-        end,
-        asNullIfEmpty(task.status) || 'scheduled',
-      ]
+  // Planned calendar event
+  if (plannedStart && !Number.isNaN(plannedStart.getTime()) && minutes > 0) {
+    const plannedEnd = new Date(plannedStart.getTime() + minutes * 60 * 1000);
+
+    const existing = await pool.query(
+      `SELECT event_id FROM "CalendarEvent"
+       WHERE user_id = $1 AND task_id = $2 AND source = $3
+       LIMIT 1`,
+      [userId, task.task_id, 'task_planned']
     );
-    return result.rows[0];
+
+    if (existing.rows[0]) {
+      const result = await pool.query(
+        `UPDATE "CalendarEvent"
+         SET title = $3,
+             description = $4,
+             start_datetime = $5,
+             end_datetime = $6,
+             status = $7
+         WHERE event_id = $1 AND user_id = $2
+         RETURNING *`,
+        [
+          existing.rows[0].event_id,
+          userId,
+          asNullIfEmpty(task.title),
+          asNullIfEmpty(task.notes),
+          plannedStart,
+          plannedEnd,
+          asNullIfEmpty(task.status) || 'scheduled',
+        ]
+      );
+      plannedUpdated = result.rows[0];
+    } else {
+      const result = await pool.query(
+        `INSERT INTO "CalendarEvent"
+         (user_id, task_id, title, description, start_datetime, end_datetime, status, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [
+          userId,
+          task.task_id,
+          asNullIfEmpty(task.title),
+          asNullIfEmpty(task.notes),
+          plannedStart,
+          plannedEnd,
+          asNullIfEmpty(task.status) || 'scheduled',
+          'task_planned',
+        ]
+      );
+      plannedUpdated = result.rows[0];
+    }
+  } else {
+    await pool.query(
+      `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
+      [userId, task.task_id, 'task_planned']
+    );
   }
 
-  const result = await pool.query(
-    `INSERT INTO "CalendarEvent"
-     (user_id, task_id, title, description, start_datetime, end_datetime, status, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING *`,
-    [
-      userId,
-      task.task_id,
-      asNullIfEmpty(task.title),
-      asNullIfEmpty(task.notes),
-      start,
-      end,
-      asNullIfEmpty(task.status) || 'scheduled',
-      'task',
-    ]
-  );
+  // Due calendar event (fixed duration so it appears on the grid)
+  const dueDurationMinutes = 15;
+  if (dueStart && !Number.isNaN(dueStart.getTime())) {
+    const dueEnd = new Date(dueStart.getTime() + dueDurationMinutes * 60 * 1000);
 
-  return result.rows[0];
+    const existing = await pool.query(
+      `SELECT event_id FROM "CalendarEvent"
+       WHERE user_id = $1 AND task_id = $2 AND source = $3
+       LIMIT 1`,
+      [userId, task.task_id, 'task_due']
+    );
+
+    if (existing.rows[0]) {
+      const result = await pool.query(
+        `UPDATE "CalendarEvent"
+         SET title = $3,
+             description = $4,
+             start_datetime = $5,
+             end_datetime = $6,
+             status = $7
+         WHERE event_id = $1 AND user_id = $2
+         RETURNING *`,
+        [
+          existing.rows[0].event_id,
+          userId,
+          asNullIfEmpty(task.title),
+          asNullIfEmpty(task.notes),
+          dueStart,
+          dueEnd,
+          asNullIfEmpty(task.status) || 'scheduled',
+        ]
+      );
+      dueUpdated = result.rows[0];
+    } else {
+      const result = await pool.query(
+        `INSERT INTO "CalendarEvent"
+         (user_id, task_id, title, description, start_datetime, end_datetime, status, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [
+          userId,
+          task.task_id,
+          asNullIfEmpty(task.title),
+          asNullIfEmpty(task.notes),
+          dueStart,
+          dueEnd,
+          asNullIfEmpty(task.status) || 'scheduled',
+          'task_due',
+        ]
+      );
+      dueUpdated = result.rows[0];
+    }
+  } else {
+    await pool.query(
+      `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
+      [userId, task.task_id, 'task_due']
+    );
+  }
+
+  return plannedUpdated || dueUpdated;
 }
 
 // Get all users
@@ -161,13 +239,19 @@ export async function getUserById(userId) {
 // Update task
 export async function updateTask(taskId, updates) {
   try {
-    const { title, notes, priority, status, estimated_minutes, due_datetime } = updates;
+    const { title, notes, priority, status, estimated_minutes, planned_datetime, due_datetime } = updates;
     const result = await pool.query(
       `UPDATE "Task" 
-       SET title = $1, notes = $2, priority = $3, status = $4, estimated_minutes = $5, due_datetime = $6
-       WHERE task_id = $7 
+       SET title = $1,
+           notes = $2,
+           priority = $3,
+           status = $4,
+           estimated_minutes = $5,
+           planned_datetime = $6,
+           due_datetime = $7
+       WHERE task_id = $8 
        RETURNING *`,
-      [title, notes, priority, status, estimated_minutes, due_datetime || null, taskId]
+      [title, notes, priority, status, estimated_minutes, planned_datetime || null, due_datetime || null, taskId]
     );
     return result.rows[0];
   } catch (err) {
@@ -330,23 +414,35 @@ export async function upsertSleepWindow(sleepGoalId, { day_of_week, start_time, 
 
 export async function getCalendarEvents(userId, { from, to } = {}) {
   const params = [userId];
-  const where = ['user_id = $1'];
+  const where = ['ce.user_id = $1'];
 
   if (from) {
     params.push(from);
-    where.push(`start_datetime >= $${params.length}`);
+    where.push(`ce.start_datetime >= $${params.length}`);
   }
   if (to) {
     params.push(to);
-    where.push(`start_datetime < $${params.length}`);
+    where.push(`ce.start_datetime < $${params.length}`);
   }
 
   const result = await pool.query(
-    `SELECT event_id, user_id, task_id, title, description, start_datetime, end_datetime, status,
-            source, external_uid, is_all_day
-     FROM "CalendarEvent"
+    `SELECT
+       ce.event_id,
+       ce.user_id,
+       ce.task_id,
+       ce.title,
+       ce.description,
+       ce.start_datetime,
+       ce.end_datetime,
+       ce.status,
+       ce.source,
+       ce.external_uid,
+       ce.is_all_day,
+       t.due_datetime AS task_due_datetime
+     FROM "CalendarEvent" ce
+     LEFT JOIN "Task" t ON t.task_id = ce.task_id
      WHERE ${where.join(' AND ')}
-     ORDER BY start_datetime ASC`,
+     ORDER BY ce.start_datetime ASC`,
     params
   );
   return result.rows;
