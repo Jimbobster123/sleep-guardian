@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import SleepGoalForm, { SleepGoalDraft } from "@/components/SleepGoalForm";
-import { apiJson } from "@/lib/api";
+import { ApiError, apiJson } from "@/lib/api";
+import { toast } from "@/components/ui/sonner";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function Profile() {
@@ -15,7 +17,10 @@ export default function Profile() {
   const [goal, setGoal] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [icsBusy, setIcsBusy] = useState(false);
+   const [googleBusy, setGoogleBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
+  const [goalError, setGoalError] = useState<string | null>(null);
 
   useEffect(() => {
     setFirst(user?.first_name || "");
@@ -34,6 +39,13 @@ export default function Profile() {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    const googleParam = searchParams.get("google");
+    if (googleParam === "connected") {
+      setMsg("Google Calendar connected.");
+    }
+  }, [searchParams]);
 
   const saveProfile = async () => {
     if (!token) return;
@@ -56,10 +68,15 @@ export default function Profile() {
     if (!token) return;
     setBusy(true);
     setMsg(null);
+    setGoalError(null);
     try {
       const res = await apiJson("/api/me/sleep-goal", { method: "PUT", token, body: JSON.stringify(draft) });
       setGoal({ goal: res.goal, windows: res.windows });
-      setMsg("Sleep goal saved.");
+      toast.success("Sleep goal saved.", { duration: 3000 });
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to save sleep goal.";
+      setGoalError(message);
+      toast.error(message, { duration: 3000 });
     } finally {
       setBusy(false);
     }
@@ -80,6 +97,44 @@ export default function Profile() {
       setMsg(`Imported ${res.imported} events.`);
     } finally {
       setIcsBusy(false);
+    }
+  };
+
+  const connectGoogle = async () => {
+    if (!token) {
+      setMsg("You must be logged in to connect Google Calendar.");
+      return;
+    }
+    setGoogleBusy(true);
+    setMsg(null);
+    try {
+      const res = await apiJson<{ url: string }>("/api/google/auth-url", { token });
+      window.location.href = res.url;
+    } catch (err: any) {
+      setMsg(err?.message || "Failed to connect Google Calendar.");
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
+
+  const syncGoogle = async () => {
+    if (!token) {
+      setMsg("You must be logged in to sync Google Calendar.");
+      return;
+    }
+    setGoogleBusy(true);
+    setMsg(null);
+    try {
+      const res = await apiJson<{ imported: number }>("/api/google/sync", {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
+      });
+      setMsg(`Synced ${res.imported} events from Google.`);
+    } catch (err: any) {
+      setMsg(err?.message || "Google sync failed.");
+    } finally {
+      setGoogleBusy(false);
     }
   };
 
@@ -128,13 +183,31 @@ export default function Profile() {
             initial={{
               goal_type: goal?.goal?.goal_type,
               target_sleep_minutes: goal?.goal?.target_sleep_minutes,
+              target_bedtime: goal?.goal?.target_bedtime,
+              target_wake_time: goal?.goal?.target_wake_time,
               bedtime_flex_minutes: goal?.goal?.bedtime_flex_minutes,
               windows: goal?.windows,
             }}
             onSubmit={saveGoal}
             submitLabel={busy ? "Saving..." : "Save sleep goal"}
             busy={busy}
+            submitError={goalError}
           />
+        </div>
+
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <h2 className="text-sm font-semibold text-foreground mb-2">Google Calendar</h2>
+          <p className="text-xs text-muted-foreground">
+            Connect your Google Calendar for automatic sync of events between Luna and Google.
+          </p>
+          <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <Button size="sm" onClick={connectGoogle} disabled={googleBusy}>
+              {googleBusy ? "Connecting..." : "Connect Google Calendar"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={syncGoogle} disabled={googleBusy}>
+              {googleBusy ? "Syncing..." : "Sync from Google"}
+            </Button>
+          </div>
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">

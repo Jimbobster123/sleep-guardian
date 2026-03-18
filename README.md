@@ -130,8 +130,8 @@ If you get `ERROR:  database "luna" already exists`, that’s fine—continue.
 
 Load schema + migrations:
 ```bash
-psql -U postgres -d luna -f db/schema.sql
-psql -U postgres -d luna -f db/migrations/001_auth_calendar_sleepgoal.sql
+psql -U postgres -d luna -f ../db/schema.sql
+psql -U postgres -d luna -f ../db/migrations/001_auth_calendar_sleepgoal.sql
 ```
 
 Optional: load sample data (only run once per database):
