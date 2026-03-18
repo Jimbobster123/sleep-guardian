@@ -493,10 +493,11 @@ const CalendarPage = () => {
                           }),
                         });
 
-                        // Refresh events for the current range
                         const evRes = await apiJson<DbEvent[]>(
-                          `/api/me/calendar-events?from=${encodeURIComponent(`${dateStr} 00:00:00`)}&to=${encodeURIComponent(`${format(addDays(day, 2), 'yyyy-MM-dd')} 00:00:00`)}`,
-                          { token }
+                          `/api/me/calendar-events?from=${encodeURIComponent(`${dateStr} 00:00:00`)}&to=${encodeURIComponent(
+                            `${format(addDays(day, 2), 'yyyy-MM-dd')} 00:00:00`,
+                          )}`,
+                          { token },
                         );
                         setEvents(evRes);
                       }}
@@ -504,12 +505,6 @@ const CalendarPage = () => {
                       Apply
                     </button>
                   ) : null}
-              {suggestions.conflicts.slice(0, 6).map((c) => (
-                <div key={c.event_id} className="text-xs text-foreground/90">
-                  <span className="font-medium">{c.title || 'Event'}</span>{" "}
-                  <span className="text-muted-foreground">
-                    {c.suggested_start_datetime ? `→ ${c.suggested_start_datetime}–${c.suggested_end_datetime}` : "(no shift found)"}
-                  </span>
                 </div>
               ))}
               {suggestions.conflicts.length > 6 && <div className="text-xs text-muted-foreground">…and more</div>}
