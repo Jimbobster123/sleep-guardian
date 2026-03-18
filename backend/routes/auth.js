@@ -1,12 +1,19 @@
 import express from 'express';
 import crypto from 'crypto';
 import { hashPassword, verifyPassword } from '../auth/password.js';
+import pool from '../db.js';
 import { createSession, createUser, getUserByEmail, revokeSession } from '../queries.js';
 
 const router = express.Router();
 
 function isValidEmail(email) {
   return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function normalizeEmail(email) {
+  return String(email || '')
+    .trim()
+    .toLowerCase();
 }
 
 function passwordMeetsMinimum(password) {
@@ -24,40 +31,64 @@ function sessionExpiryDate() {
 }
 
 router.post('/signup', async (req, res) => {
+  const client = await pool.connect();
   try {
     const { email, password, firstName, lastName, timezone } = req.body || {};
-    if (!isValidEmail(email)) return res.status(400).json({ error: 'Invalid email' });
+    const normalizedEmail = normalizeEmail(email);
+    if (!isValidEmail(normalizedEmail)) return res.status(400).json({ error: 'Invalid email' });
     if (!passwordMeetsMinimum(password)) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-    const existing = await getUserByEmail(email);
+    await client.query('BEGIN');
+
+    const existing = await getUserByEmail(normalizedEmail);
     if (existing) return res.status(409).json({ error: 'Email already in use' });
 
     const password_hash = await hashPassword(password);
-    const user = await createUser({
-      email,
-      password_hash,
-      first_name: firstName,
-      last_name: lastName,
-      timezone,
-    });
+    const userInsert = await client.query(
+      `INSERT INTO "User" (email, password_hash, first_name, last_name, timezone)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING user_id, email, first_name, last_name, timezone, created_at`,
+      [
+        normalizedEmail,
+        password_hash,
+        firstName?.trim?.() ? firstName : null,
+        lastName?.trim?.() ? lastName : null,
+        timezone?.trim?.() ? timezone : null,
+      ]
+    );
+    const user = userInsert.rows[0];
 
     const session_token = newSessionToken();
     const expires_at = sessionExpiryDate();
-    await createSession({ userId: user.user_id, sessionToken: session_token, expiresAt: expires_at });
+    await client.query(
+      `INSERT INTO "AuthSession" (user_id, session_token, expires_at)
+       VALUES ($1, $2, $3)`,
+      [user.user_id, session_token, expires_at]
+    );
+
+    await client.query('COMMIT');
 
     res.json({ token: session_token, user });
   } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // ignore rollback errors
+    }
     res.status(500).json({ error: 'Signup failed', details: err.message });
+  } finally {
+    client.release();
   }
 });
 
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
-    if (!isValidEmail(email)) return res.status(400).json({ error: 'Invalid email' });
+    const normalizedEmail = normalizeEmail(email);
+    if (!isValidEmail(normalizedEmail)) return res.status(400).json({ error: 'Invalid email' });
     if (typeof password !== 'string') return res.status(400).json({ error: 'Invalid password' });
 
-    const userRecord = await getUserByEmail(email);
+    const userRecord = await getUserByEmail(normalizedEmail);
     if (!userRecord) return res.status(401).json({ error: 'Invalid credentials' });
 
     const ok = await verifyPassword(password, userRecord.password_hash);

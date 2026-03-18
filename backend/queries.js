@@ -38,7 +38,9 @@ export async function getTaskById(taskId) {
 // Get all users
 export async function getAllUsers() {
   try {
-    const result = await pool.query('SELECT user_id, email, first_name, last_name FROM "User" ORDER BY created_at DESC');
+    const result = await pool.query(
+      'SELECT user_id, email, first_name, last_name, timezone, google_calendar_id FROM "User" ORDER BY created_at DESC'
+    );
     return result.rows;
   } catch (err) {
     console.error('Error fetching users:', err);
@@ -50,7 +52,7 @@ export async function getAllUsers() {
 export async function getUserById(userId) {
   try {
     const result = await pool.query(
-      'SELECT user_id, email, first_name, last_name, timezone FROM "User" WHERE user_id = $1',
+      'SELECT user_id, email, first_name, last_name, timezone, google_calendar_id FROM "User" WHERE user_id = $1',
       [userId]
     );
     return result.rows[0];
@@ -80,8 +82,20 @@ export async function updateTask(taskId, updates) {
 
 export async function getUserByEmail(email) {
   const result = await pool.query(
-    'SELECT user_id, email, password_hash, first_name, last_name, timezone FROM "User" WHERE email = $1',
+    'SELECT user_id, email, password_hash, first_name, last_name, timezone, google_calendar_id FROM "User" WHERE email = $1',
     [email]
+  );
+  return result.rows[0];
+}
+
+export async function updateUserGoogleIntegration(userId, { google_refresh_token, google_calendar_id }) {
+  const result = await pool.query(
+    `UPDATE "User"
+     SET google_refresh_token = COALESCE($2, google_refresh_token),
+         google_calendar_id = COALESCE($3, google_calendar_id)
+     WHERE user_id = $1
+     RETURNING user_id, email, first_name, last_name, timezone, google_calendar_id`,
+    [userId, google_refresh_token || null, google_calendar_id || null]
   );
   return result.rows[0];
 }
@@ -117,7 +131,8 @@ export async function revokeSession(sessionToken) {
 
 export async function getUserBySessionToken(sessionToken) {
   const result = await pool.query(
-    `SELECT u.user_id, u.email, u.first_name, u.last_name, u.timezone
+    `SELECT u.user_id, u.email, u.first_name, u.last_name, u.timezone,
+            u.google_refresh_token, u.google_calendar_id
      FROM "AuthSession" s
      JOIN "User" u ON u.user_id = s.user_id
      WHERE s.session_token = $1
@@ -239,6 +254,17 @@ export async function getCalendarEvents(userId, { from, to } = {}) {
   return result.rows;
 }
 
+export async function getCalendarEventById(userId, eventId) {
+  const result = await pool.query(
+    `SELECT event_id, user_id, title, description, start_datetime, end_datetime, status, source,
+            external_uid, is_all_day, google_event_id
+     FROM "CalendarEvent"
+     WHERE event_id = $1 AND user_id = $2`,
+    [eventId, userId]
+  );
+  return result.rows[0];
+}
+
 export async function createCalendarEvent(userId, event) {
   const {
     task_id,
@@ -288,6 +314,7 @@ export async function updateCalendarEvent(userId, eventId, updates) {
   if ('end_datetime' in updates) set('end_datetime', updates.end_datetime || null);
   if ('status' in updates) set('status', asNullIfEmpty(updates.status));
   if ('is_all_day' in updates) set('is_all_day', typeof updates.is_all_day === 'boolean' ? updates.is_all_day : false);
+  if ('google_event_id' in updates) set('google_event_id', updates.google_event_id || null);
 
   if (!fields.length) return null;
 
