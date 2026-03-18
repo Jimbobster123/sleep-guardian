@@ -446,3 +446,12 @@ sleep-guardian/
 ## Support
 
 For issues or questions, please refer to the troubleshooting section above or review the application logs in the terminal windows where the frontend and backend are running.
+
+## Current Working functions 
+ - Login functionality
+ - Adding a sleep goal 
+ - Connect to google calander
+ - Calander 
+ - Add tasks 
+ - Ui/ux features
+  
