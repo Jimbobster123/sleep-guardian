@@ -258,18 +258,6 @@ export default function SleepGoalForm({
               <span>Choose a window for each day</span>
             </label>
           </div>
-        <div className="space-y-1">
-          <Label htmlFor="flex">Flex (minutes)</Label>
-          <Input
-            id="flex"
-            type="number"
-            min="0"
-            step="1"
-            inputMode="numeric"
-            value={bedFlex}
-            onChange={(e) => handleFlexChange(e.target.value)}
-          />
-          {flexError && <p className="text-xs text-destructive">{flexError}</p>}
         </div>
       )}
 
@@ -297,88 +285,35 @@ export default function SleepGoalForm({
               />
             </div>
           </div>
-        <div className={`space-y-1 ${goalType === "fixed_duration" ? "" : "opacity-50 pointer-events-none"}`}>
-          <Label htmlFor="hours">Sleep hours</Label>
-          <Input
-            id="hours"
-            type="number"
-            min="0.1"
-            step="0.1"
-            inputMode="decimal"
-            value={sleepHours}
-            onChange={(e) => handleSleepHoursChange(e.target.value)}
-          />
-          {goalType === "fixed_duration" && hoursError && <p className="text-xs text-destructive">{hoursError}</p>}
         </div>
       )}
 
       {/* Per-day calendar grid */}
       {goalType !== "fixed_duration" && windowMode === "per_day" && (
         <div className="bg-card rounded-xl border border-border/50 shadow-sm p-4">
-          <div className="space-y-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {DAYS.map(({ dow, label }) => (
-              <div
-                key={dow}
-                className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)] items-center gap-3"
-              >
-                <div className="text-xs font-semibold tracking-wide text-foreground uppercase">{label}</div>
+              <div key={dow} className="flex items-center justify-between gap-3">
+                <div className="w-12 text-sm font-medium text-foreground">{label}</div>
                 <div className="flex items-center gap-2">
-                  <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Bed</Label>
-      {goalType === "fixed_bedtime" && (
-        <div className="space-y-1">
-          <Label htmlFor="targetBedtime">General target bedtime</Label>
-          <input
-            id="targetBedtime"
-            type="time"
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            value={targetBedtime}
-            onChange={(e) => setTargetBedtime(e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">
-            Optional. Leave blank to rely only on the per-day bedtime values below.
-          </p>
-        </div>
-      )}
-
-      {goalType === "fixed_wake_time" && (
-        <div className="space-y-1">
-          <Label htmlFor="targetWakeTime">General target wake time</Label>
-          <input
-            id="targetWakeTime"
-            type="time"
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            value={targetWakeTime}
-            onChange={(e) => setTargetWakeTime(e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">
-            Optional. Leave blank to rely only on the per-day wake times below.
-          </p>
-        </div>
-      )}
-
-      <div className="bg-card rounded-xl border border-border/50 shadow-sm p-4">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {DAYS.map(({ dow, label }) => (
-            <div key={dow} className="flex items-center justify-between gap-3">
-              <div className="w-12 text-sm font-medium text-foreground">{label}</div>
-              <div className="flex items-center gap-2">
-                <div className="space-y-1">
-                  <Label className="text-[11px] text-muted-foreground">Bed</Label>
-                  <input
-                    type="time"
-                    className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
-                    value={times[dow]?.bed || "23:00"}
-                    onChange={(e) => setTime(dow, "bed", e.target.value)}
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Wake</Label>
-                  <input
-                    type="time"
-                    className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
-                    value={times[dow]?.wake || "07:00"}
-                    onChange={(e) => setTime(dow, "wake", e.target.value)}
-                  />
+                  <div className="space-y-1">
+                    <Label className="text-[11px] text-muted-foreground">Bed</Label>
+                    <input
+                      type="time"
+                      className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                      value={times[dow]?.bed || "23:00"}
+                      onChange={(e) => setTime(dow, "bed", e.target.value)}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Wake</Label>
+                    <input
+                      type="time"
+                      className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                      value={times[dow]?.wake || "07:00"}
+                      onChange={(e) => setTime(dow, "wake", e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
             ))}
@@ -386,8 +321,6 @@ export default function SleepGoalForm({
         </div>
       )}
 
-      <div className="flex justify-center">
-        <Button type="submit" disabled={busy}>
       {submitError && <div className="text-sm text-destructive">{submitError}</div>}
 
       <div className="flex justify-end">
