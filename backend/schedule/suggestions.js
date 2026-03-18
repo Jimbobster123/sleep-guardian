@@ -152,6 +152,7 @@ export async function buildScheduleSuggestions({ userId, date }) {
   const defaultEnd = window?.end_time || goal?.target_wake_time || '07:00:00';
 
   const preferred = normalizeWindow(date, defaultStart, defaultEnd);
+  const preferredSleepWindow = { start: toPgTimestampLocal(preferred.start), end: toPgTimestampLocal(preferred.end) };
 
   const from = `${date} 00:00:00`;
   const to = toPgTimestampLocal(addMinutes(new Date(`${date}T00:00:00`), 48 * 60)); // include overnight
@@ -164,6 +165,7 @@ export async function buildScheduleSuggestions({ userId, date }) {
       return {
         date,
         goal_type: goalType,
+        preferred_sleep_window: preferredSleepWindow,
         error: 'target_sleep_minutes is required for fixed_duration',
       };
     }
@@ -175,6 +177,7 @@ export async function buildScheduleSuggestions({ userId, date }) {
       return {
         date,
         goal_type: goalType,
+        preferred_sleep_window: preferredSleepWindow,
         sleep_window: { start: toPgTimestampLocal(preferredStart), end: toPgTimestampLocal(preferred.end) },
         conflicts: [],
         warning: 'No conflict-free sleep window found in search range',
@@ -184,8 +187,10 @@ export async function buildScheduleSuggestions({ userId, date }) {
     return {
       date,
       goal_type: goalType,
+      preferred_sleep_window: preferredSleepWindow,
       sleep_window: { start: toPgTimestampLocal(best.start), end: toPgTimestampLocal(best.end) },
       conflicts: [],
+      moved_sleep_window: toPgTimestampLocal(best.start) !== preferredSleepWindow.start || toPgTimestampLocal(best.end) !== preferredSleepWindow.end,
     };
   }
 
@@ -200,7 +205,8 @@ export async function buildScheduleSuggestions({ userId, date }) {
   return {
     date,
     goal_type: goalType,
-    sleep_window: { start: toPgTimestampLocal(preferred.start), end: toPgTimestampLocal(preferred.end) },
+    preferred_sleep_window: preferredSleepWindow,
+    sleep_window: preferredSleepWindow,
     conflicts,
   };
 }
