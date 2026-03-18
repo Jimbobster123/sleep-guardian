@@ -169,27 +169,29 @@ export async function getActiveSleepGoal(userId) {
   return result.rows[0];
 }
 
-export async function createOrUpdateSleepGoal(userId, { goal_type, target_sleep_minutes, bedtime_flex_minutes }) {
+export async function createOrUpdateSleepGoal(userId, { goal_type, target_sleep_minutes, target_bedtime, target_wake_time, bedtime_flex_minutes }) {
   const existing = await getActiveSleepGoal(userId);
   if (!existing) {
     const result = await pool.query(
-      `INSERT INTO "SleepGoal" (user_id, goal_type, target_sleep_minutes, bedtime_flex_minutes, active, updated_at)
-       VALUES ($1, $2, $3, $4, true, CURRENT_TIMESTAMP)
+      `INSERT INTO "SleepGoal" (user_id, target_bedtime, target_wake_time, goal_type, target_sleep_minutes, bedtime_flex_minutes, active, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, true, CURRENT_TIMESTAMP)
        RETURNING *`,
-      [userId, goal_type, target_sleep_minutes ?? null, bedtime_flex_minutes ?? 0]
+      [userId, target_bedtime ?? null, target_wake_time ?? null, goal_type, target_sleep_minutes ?? null, bedtime_flex_minutes ?? 0]
     );
     return result.rows[0];
   }
 
   const result = await pool.query(
     `UPDATE "SleepGoal"
-     SET goal_type = $2,
-         target_sleep_minutes = $3,
-         bedtime_flex_minutes = COALESCE($4, bedtime_flex_minutes),
+     SET target_bedtime = $2,
+         target_wake_time = $3,
+         goal_type = $4,
+         target_sleep_minutes = $5,
+         bedtime_flex_minutes = COALESCE($6, bedtime_flex_minutes),
          updated_at = CURRENT_TIMESTAMP
      WHERE sleep_goal_id = $1
      RETURNING *`,
-    [existing.sleep_goal_id, goal_type, target_sleep_minutes ?? null, bedtime_flex_minutes]
+    [existing.sleep_goal_id, target_bedtime ?? null, target_wake_time ?? null, goal_type, target_sleep_minutes ?? null, bedtime_flex_minutes]
   );
   return result.rows[0];
 }
@@ -213,7 +215,7 @@ export async function upsertSleepWindow(sleepGoalId, { day_of_week, start_time, 
   if (existing.rows[0]) {
     const result = await pool.query(
       `UPDATE "SleepWindow"
-       SET start_time = $3, end_time = $4
+       SET day_of_week = $2, start_time = $3, end_time = $4
        WHERE sleep_window_id = $1
        RETURNING *`,
       [existing.rows[0].sleep_window_id, day_of_week, start_time, end_time]

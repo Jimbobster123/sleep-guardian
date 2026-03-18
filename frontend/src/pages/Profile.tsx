@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import SleepGoalForm, { SleepGoalDraft } from "@/components/SleepGoalForm";
-import { apiJson } from "@/lib/api";
+import { ApiError, apiJson } from "@/lib/api";
+import { toast } from "@/components/ui/sonner";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function Profile() {
@@ -19,6 +20,7 @@ export default function Profile() {
    const [googleBusy, setGoogleBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [searchParams] = useSearchParams();
+  const [goalError, setGoalError] = useState<string | null>(null);
 
   useEffect(() => {
     setFirst(user?.first_name || "");
@@ -66,10 +68,15 @@ export default function Profile() {
     if (!token) return;
     setBusy(true);
     setMsg(null);
+    setGoalError(null);
     try {
       const res = await apiJson("/api/me/sleep-goal", { method: "PUT", token, body: JSON.stringify(draft) });
       setGoal({ goal: res.goal, windows: res.windows });
-      setMsg("Sleep goal saved.");
+      toast.success("Sleep goal saved.", { duration: 3000 });
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to save sleep goal.";
+      setGoalError(message);
+      toast.error(message, { duration: 3000 });
     } finally {
       setBusy(false);
     }
@@ -176,12 +183,15 @@ export default function Profile() {
             initial={{
               goal_type: goal?.goal?.goal_type,
               target_sleep_minutes: goal?.goal?.target_sleep_minutes,
+              target_bedtime: goal?.goal?.target_bedtime,
+              target_wake_time: goal?.goal?.target_wake_time,
               bedtime_flex_minutes: goal?.goal?.bedtime_flex_minutes,
               windows: goal?.windows,
             }}
             onSubmit={saveGoal}
             submitLabel={busy ? "Saving..." : "Save sleep goal"}
             busy={busy}
+            submitError={goalError}
           />
         </div>
 
