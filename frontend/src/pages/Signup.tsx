@@ -5,6 +5,50 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/AuthContext";
 
+// Common timezones with human-readable labels (IANA identifiers for backend/calendar)
+const TIMEZONE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "", label: "Select timezone" },
+  { value: "America/New_York", label: "Eastern Time (New York)" },
+  { value: "America/Chicago", label: "Central Time (Chicago)" },
+  { value: "America/Denver", label: "Mountain Time (Denver)" },
+  { value: "America/Los_Angeles", label: "Pacific Time (Los Angeles)" },
+  { value: "America/Phoenix", label: "Arizona (Phoenix)" },
+  { value: "America/Anchorage", label: "Alaska (Anchorage)" },
+  { value: "Pacific/Honolulu", label: "Hawaii (Honolulu)" },
+  { value: "America/Toronto", label: "Eastern Time (Toronto)" },
+  { value: "America/Vancouver", label: "Pacific Time (Vancouver)" },
+  { value: "America/Edmonton", label: "Mountain Time (Edmonton)" },
+  { value: "America/Winnipeg", label: "Central Time (Winnipeg)" },
+  { value: "America/Halifax", label: "Atlantic Time (Halifax)" },
+  { value: "America/St_Johns", label: "Newfoundland Time" },
+  { value: "America/Mexico_City", label: "Central Mexico (Mexico City)" },
+  { value: "America/Sao_Paulo", label: "São Paulo" },
+  { value: "America/Buenos_Aires", label: "Buenos Aires" },
+  { value: "Europe/London", label: "London" },
+  { value: "Europe/Paris", label: "Paris" },
+  { value: "Europe/Berlin", label: "Berlin" },
+  { value: "Europe/Amsterdam", label: "Amsterdam" },
+  { value: "Europe/Madrid", label: "Madrid" },
+  { value: "Europe/Rome", label: "Rome" },
+  { value: "Europe/Stockholm", label: "Stockholm" },
+  { value: "Europe/Moscow", label: "Moscow" },
+  { value: "Asia/Dubai", label: "Dubai" },
+  { value: "Asia/Kolkata", label: "India (Mumbai, Delhi)" },
+  { value: "Asia/Singapore", label: "Singapore" },
+  { value: "Asia/Hong_Kong", label: "Hong Kong" },
+  { value: "Asia/Shanghai", label: "Shanghai" },
+  { value: "Asia/Tokyo", label: "Tokyo" },
+  { value: "Asia/Seoul", label: "Seoul" },
+  { value: "Australia/Perth", label: "Perth" },
+  { value: "Australia/Adelaide", label: "Adelaide" },
+  { value: "Australia/Sydney", label: "Sydney" },
+  { value: "Australia/Melbourne", label: "Melbourne" },
+  { value: "Pacific/Auckland", label: "Auckland" },
+  { value: "Africa/Cairo", label: "Cairo" },
+  { value: "Africa/Johannesburg", label: "Johannesburg" },
+  { value: "UTC", label: "UTC" },
+];
+
 export default function Signup() {
   const { signup } = useAuth();
   const nav = useNavigate();
@@ -66,7 +110,18 @@ export default function Signup() {
 
           <div className="space-y-1">
             <Label htmlFor="tz">Timezone (optional)</Label>
-            <Input id="tz" placeholder="America/Denver" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+            <select
+              id="tz"
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+            >
+              {TIMEZONE_OPTIONS.map((opt) => (
+                <option key={opt.value || "empty"} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           {error && <div className="text-sm text-destructive">{error}</div>}
