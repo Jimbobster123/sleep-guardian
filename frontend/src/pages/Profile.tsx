@@ -8,6 +8,7 @@ import SleepGoalForm, { SleepGoalDraft } from "@/components/SleepGoalForm";
 import { ApiError, apiJson } from "@/lib/api";
 import { toast } from "@/components/ui/sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { LogOut } from "lucide-react";
 
 export default function Profile() {
   const { token, user, refreshMe, logout } = useAuth();
@@ -142,16 +143,23 @@ export default function Profile() {
     <div>
       <PageHeader title="Profile" compact />
       <div className="px-5 -mt-2 space-y-4 pb-6">
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-foreground">{user?.email}</p>
-              <p className="text-xs text-muted-foreground">Account</p>
-            </div>
-            <Button variant="outline" onClick={logout}>
-              Log out
-            </Button>
+        {/* User / Log out (moved from Menu) */}
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
+            <span className="text-sm font-semibold text-accent">
+              {(user?.first_name?.[0] || user?.email?.[0] || 'U').toUpperCase()}
+              {(user?.last_name?.[0] || '').toUpperCase()}
+            </span>
           </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground">
+              {[user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Your account'}
+            </p>
+            <p className="text-xs text-muted-foreground">{user?.email}</p>
+          </div>
+          <button onClick={logout} aria-label="Log out">
+            <LogOut className="w-4.5 h-4.5 text-muted-foreground" />
+          </button>
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">

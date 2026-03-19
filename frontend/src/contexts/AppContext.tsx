@@ -1,5 +1,4 @@
-import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
-import { useTheme } from './ThemeContext';
+import React, { createContext, useContext, useState, ReactNode } from 'react';
 
 interface AppState {
   crisisMode: boolean;
@@ -25,13 +24,6 @@ export const useApp = () => {
 export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [crisisMode, setCrisisMode] = useState(false);
   const [emotionalCheckIn, setEmotionalCheckIn] = useState<string | null>(null);
-  const { setTheme } = useTheme();
-
-  useEffect(() => {
-    if (crisisMode) {
-      setTheme('dark');
-    }
-  }, [crisisMode, setTheme]);
 
   const value: AppState = {
     crisisMode,
