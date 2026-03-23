@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,16 +48,30 @@ function subtractMinutesFromTime(endTime: string, minutes: number) {
   return formatHm(hh, mm);
 }
 
+function hoursInWindow(bed: string, wake: string): number {
+  const bedParsed = parseHm(bed);
+  const wakeParsed = parseHm(wake);
+  let bedMins = bedParsed.h * 60 + bedParsed.m;
+  let wakeMins = wakeParsed.h * 60 + wakeParsed.m;
+  if (wakeMins <= bedMins) wakeMins += 24 * 60;
+  const hours = (wakeMins - bedMins) / 60;
+  return Math.round(hours * 10) / 10;
+}
+
 export default function SleepGoalForm({
   initial,
   onSubmit,
   submitLabel = "Save",
   busy,
   submitError,
+  formId,
+  hideSubmitButton,
 }: {
   initial?: Partial<SleepGoalDraft>;
   onSubmit: (draft: SleepGoalDraft) => Promise<void> | void;
   submitLabel?: string;
+  formId?: string;
+  hideSubmitButton?: boolean;
   busy?: boolean;
   submitError?: string | null;
 }) {
@@ -91,6 +105,42 @@ export default function SleepGoalForm({
     bed: initialByDow[0]?.bed || "23:00",
     wake: initialByDow[0]?.wake || "07:00",
   }));
+
+  // Sync state when initial data loads (e.g. from Profile after API fetch)
+  useEffect(() => {
+    if (!initial) return;
+    setGoalType((initial.goal_type as GoalType) || "fixed_bedtime");
+    const mins = initial.target_sleep_minutes;
+    setSleepHours(typeof mins === "number" && mins > 0 ? String(Math.round((mins / 60) * 10) / 10) : "8");
+    setBedFlex(String(initial.bedtime_flex_minutes ?? 30));
+    const wins = initial.windows || [];
+    if (wins.length >= 7) {
+      const allSame = wins.every(
+        (w: { start_time: string; end_time: string }) =>
+          w.start_time === wins[0].start_time && w.end_time === wins[0].end_time
+      );
+      if (allSame) {
+        setWindowMode("same");
+        setSingleWindow({
+          bed: String(wins[0].start_time || "23:00").slice(0, 5),
+          wake: String(wins[0].end_time || "07:00").slice(0, 5),
+        });
+      } else {
+        setWindowMode("per_day");
+      }
+      const by: Record<number, { bed: string; wake: string }> = {};
+      for (const d of DAYS) by[d.dow] = { bed: "23:00", wake: "07:00" };
+      for (const w of wins) {
+        if (w && w.day_of_week in by) {
+          by[w.day_of_week] = {
+            bed: String(w.start_time || "23:00").slice(0, 5),
+            wake: String(w.end_time || "07:00").slice(0, 5),
+          };
+        }
+      }
+      setTimes(by);
+    }
+  }, [initial?.goal_type, initial?.target_sleep_minutes, initial?.bedtime_flex_minutes, initial?.windows]);
   const [flexError, setFlexError] = useState<string | null>(null);
   const [hoursError, setHoursError] = useState<string | null>(null);
 
@@ -179,7 +229,7 @@ export default function SleepGoalForm({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 max-w-xl mx-auto">
+    <form id={formId} onSubmit={handleSubmit} className="space-y-6 max-w-xl mx-auto">
       {/* Goal type */}
       <div className="space-y-1">
         <Label htmlFor="goalType">Goal type</Label>
@@ -265,7 +315,7 @@ export default function SleepGoalForm({
       {goalType !== "fixed_duration" && windowMode === "same" && (
         <div className="bg-card rounded-xl border border-border/50 shadow-sm p-4 space-y-3">
           <p className="text-sm font-medium text-foreground">Sleep window (applies to every day)</p>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:flex-wrap">
             <div className="flex items-center gap-3">
               <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Bedtime</Label>
               <input
@@ -284,35 +334,48 @@ export default function SleepGoalForm({
                 onChange={(e) => setSingleWindow((w) => ({ ...w, wake: e.target.value }))}
               />
             </div>
+            <div className="flex items-center gap-3">
+              <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Hours</Label>
+              <div className="h-10 min-w-[4rem] flex items-center justify-center rounded-md bg-accent/20 text-accent px-4 text-sm font-semibold">
+                {hoursInWindow(singleWindow.bed || "23:00", singleWindow.wake || "07:00")}
+              </div>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Per-day calendar grid */}
+      {/* Per-day calendar grid (matches onboarding layout) */}
       {goalType !== "fixed_duration" && windowMode === "per_day" && (
         <div className="bg-card rounded-xl border border-border/50 shadow-sm p-4">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="space-y-2">
             {DAYS.map(({ dow, label }) => (
-              <div key={dow} className="flex items-center justify-between gap-3">
-                <div className="w-12 text-sm font-medium text-foreground">{label}</div>
+              <div
+                key={dow}
+                className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.6fr)] items-center gap-3"
+              >
+                <div className="text-xs font-semibold tracking-wide text-foreground uppercase">{label}</div>
                 <div className="flex items-center gap-2">
-                  <div className="space-y-1">
-                    <Label className="text-[11px] text-muted-foreground">Bed</Label>
-                    <input
-                      type="time"
-                      className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
-                      value={times[dow]?.bed || "23:00"}
-                      onChange={(e) => setTime(dow, "bed", e.target.value)}
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Wake</Label>
-                    <input
-                      type="time"
-                      className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
-                      value={times[dow]?.wake || "07:00"}
-                      onChange={(e) => setTime(dow, "wake", e.target.value)}
-                    />
+                  <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Bed</Label>
+                  <input
+                    type="time"
+                    className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                    value={times[dow]?.bed || "23:00"}
+                    onChange={(e) => setTime(dow, "bed", e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Wake</Label>
+                  <input
+                    type="time"
+                    className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                    value={times[dow]?.wake || "07:00"}
+                    onChange={(e) => setTime(dow, "wake", e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Hours</Label>
+                  <div className="h-10 min-w-[3rem] flex items-center justify-center rounded-md bg-accent/20 text-accent px-3 text-sm font-semibold">
+                    {hoursInWindow(times[dow]?.bed || "23:00", times[dow]?.wake || "07:00")}
                   </div>
                 </div>
               </div>
@@ -323,11 +386,13 @@ export default function SleepGoalForm({
 
       {submitError && <div className="text-sm text-destructive">{submitError}</div>}
 
-      <div className="flex justify-end">
-        <Button type="submit" disabled={busy || hasValidationErrors}>
-          {submitLabel}
-        </Button>
-      </div>
+      {!hideSubmitButton && (
+        <div className="flex justify-end">
+          <Button type="submit" disabled={busy || hasValidationErrors}>
+            {submitLabel}
+          </Button>
+        </div>
+      )}
     </form>
   );
 }

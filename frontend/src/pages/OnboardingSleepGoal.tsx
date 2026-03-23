@@ -4,13 +4,20 @@ import { ApiError, apiJson } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import SleepGoalForm, { SleepGoalDraft } from "@/components/SleepGoalForm";
 import { toast } from "@/components/ui/sonner";
+import { Label } from "@/components/ui/label";
+import { TIMEZONE_OPTIONS } from "@/lib/timezones";
 
 export default function OnboardingSleepGoal() {
-  const { token } = useAuth();
+  const { token, user, refreshMe } = useAuth();
   const nav = useNavigate();
   const [busy, setBusy] = useState(false);
   const [initial, setInitial] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [timezone, setTimezone] = useState(user?.timezone || "");
+
+  useEffect(() => {
+    setTimezone(user?.timezone || "");
+  }, [user?.timezone]);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,6 +40,14 @@ export default function OnboardingSleepGoal() {
     setBusy(true);
     setError(null);
     try {
+      if (timezone.trim()) {
+        await apiJson("/api/me/profile", {
+          method: "PUT",
+          token,
+          body: JSON.stringify({ timezone: timezone.trim() }),
+        });
+        await refreshMe();
+      }
       await apiJson("/api/me/sleep-goal", { method: "PUT", token, body: JSON.stringify(draft) });
       toast.success("Sleep goal saved.", { duration: 3000 });
       nav("/", { replace: true });
@@ -56,7 +71,26 @@ export default function OnboardingSleepGoal() {
           </p>
         </div>
 
-        <div className="mt-8">
+        <div className="mt-8 max-w-xl mx-auto space-y-6">
+          <div className="space-y-1">
+            <Label htmlFor="tz">Timezone (optional)</Label>
+            <select
+              id="tz"
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+            >
+              {timezone && !TIMEZONE_OPTIONS.some((o) => o.value === timezone) && (
+                <option value={timezone}>{timezone}</option>
+              )}
+              {TIMEZONE_OPTIONS.map((opt) => (
+                <option key={opt.value || "empty"} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <SleepGoalForm
             initial={{
               goal_type: initial?.goal?.goal_type,

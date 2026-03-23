@@ -11,6 +11,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useApp } from "@/contexts/AppContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { LogOut, Zap, Sun, Moon } from "lucide-react";
+import { LogOut } from "lucide-react";
+import { TIMEZONE_OPTIONS } from "@/lib/timezones";
 
 export default function Profile() {
   const { token, user, refreshMe, logout } = useAuth();
@@ -52,10 +54,12 @@ export default function Profile() {
     }
   }, [searchParams]);
 
-  const saveProfile = async () => {
+  const saveAll = async () => {
     if (!token) return;
     setBusy(true);
     setMsg(null);
+    setGoalError(null);
+    let formWillHandleBusy = false;
     try {
       await apiJson("/api/me/profile", {
         method: "PUT",
@@ -63,23 +67,31 @@ export default function Profile() {
         body: JSON.stringify({ first_name: first, last_name: last, timezone: tz }),
       });
       await refreshMe();
-      setMsg("Profile saved.");
+      const form = document.getElementById("profile-sleep-goal-form") as HTMLFormElement;
+      if (form) {
+        form.requestSubmit();
+        formWillHandleBusy = true;
+      } else {
+        toast.success("Saved.", { duration: 3000 });
+      }
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Failed to save.";
+      toast.error(message, { duration: 3000 });
     } finally {
-      setBusy(false);
+      if (!formWillHandleBusy) setBusy(false);
     }
   };
 
   const saveGoal = async (draft: SleepGoalDraft) => {
     if (!token) return;
     setBusy(true);
-    setMsg(null);
     setGoalError(null);
     try {
       const res = await apiJson("/api/me/sleep-goal", { method: "PUT", token, body: JSON.stringify(draft) });
       setGoal({ goal: res.goal, windows: res.windows });
-      toast.success("Sleep goal saved.", { duration: 3000 });
+      toast.success("Saved.", { duration: 3000 });
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Failed to save sleep goal.";
+      const message = err instanceof ApiError ? err.message : "Failed to save.";
       setGoalError(message);
       toast.error(message, { duration: 3000 });
     } finally {
@@ -273,19 +285,29 @@ export default function Profile() {
             </div>
             <div className="space-y-1">
               <Label>Timezone</Label>
-              <Input placeholder="America/Denver" value={tz} onChange={(e) => setTz(e.target.value)} />
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={tz}
+                onChange={(e) => setTz(e.target.value)}
+              >
+                {tz && !TIMEZONE_OPTIONS.some((o) => o.value === tz) && (
+                  <option value={tz}>{tz}</option>
+                )}
+                {TIMEZONE_OPTIONS.map((opt) => (
+                  <option key={opt.value || "empty"} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             </div>
-          </div>
-          <div className="flex justify-end mt-3">
-            <Button onClick={saveProfile} disabled={busy}>
-              {busy ? "Saving..." : "Save profile"}
-            </Button>
           </div>
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <h2 className="text-sm font-semibold text-foreground mb-3">Sleep goal</h2>
           <SleepGoalForm
+            formId="profile-sleep-goal-form"
+            hideSubmitButton
             initial={{
               goal_type: goal?.goal?.goal_type,
               target_sleep_minutes: goal?.goal?.target_sleep_minutes,
@@ -295,7 +317,6 @@ export default function Profile() {
               windows: goal?.windows,
             }}
             onSubmit={saveGoal}
-            submitLabel={busy ? "Saving..." : "Save sleep goal"}
             busy={busy}
             submitError={goalError}
           />
@@ -334,6 +355,12 @@ export default function Profile() {
             />
             <span className="text-xs text-muted-foreground">{icsBusy ? "Importing..." : ""}</span>
           </div>
+        </div>
+
+        <div className="flex justify-center pt-4">
+          <Button onClick={saveAll} disabled={busy} size="lg" className="min-w-[140px]">
+            {busy ? "Saving..." : "Save"}
+          </Button>
         </div>
 
         {msg && <div className="text-sm text-foreground/80">{msg}</div>}
