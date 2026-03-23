@@ -8,10 +8,14 @@ import SleepGoalForm, { SleepGoalDraft } from "@/components/SleepGoalForm";
 import { ApiError, apiJson } from "@/lib/api";
 import { toast } from "@/components/ui/sonner";
 import { useAuth } from "@/contexts/AuthContext";
-import { LogOut } from "lucide-react";
+import { useApp } from "@/contexts/AppContext";
+import { useTheme } from "@/contexts/ThemeContext";
+import { LogOut, Zap, Sun, Moon } from "lucide-react";
 
 export default function Profile() {
   const { token, user, refreshMe, logout } = useAuth();
+  const { crisisMode, setCrisisMode } = useApp();
+  const { theme, toggleTheme } = useTheme();
   const [first, setFirst] = useState(user?.first_name || "");
   const [last, setLast] = useState(user?.last_name || "");
   const [tz, setTz] = useState(user?.timezone || "");
@@ -144,7 +148,7 @@ export default function Profile() {
       <PageHeader title="Profile" compact />
       <div className="px-5 -mt-2 space-y-4 pb-6">
         {/* User / Log out (moved from Menu) */}
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 flex items-center gap-3">
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 flex items-center gap-3 overflow-visible">
           <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
             <span className="text-sm font-semibold text-accent">
               {(user?.first_name?.[0] || user?.email?.[0] || 'U').toUpperCase()}
@@ -157,9 +161,103 @@ export default function Profile() {
             </p>
             <p className="text-xs text-muted-foreground">{user?.email}</p>
           </div>
-          <button onClick={logout} aria-label="Log out">
+          <button
+            onClick={logout}
+            aria-label="Log out"
+            className="group relative flex items-center justify-center w-9 h-9 rounded-lg hover:bg-muted/50 transition-colors"
+          >
             <LogOut className="w-4.5 h-4.5 text-muted-foreground" />
+            <span className="absolute right-full mr-2 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+              Logout
+            </span>
           </button>
+        </div>
+
+        {/* Crisis Mode */}
+        <div
+          className={`rounded-xl p-4 border shadow-sm ${
+            crisisMode ? 'bg-crisis-light border-crisis/30 crisis-glow' : 'bg-card border-border/50'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                  crisisMode ? 'bg-crisis/10' : 'bg-muted'
+                }`}
+              >
+                <Zap className={`w-5 h-5 ${crisisMode ? 'text-warning' : 'text-sleep'}`} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">Crisis / Exam Mode</p>
+                <p className="text-xs text-muted-foreground">
+                  {crisisMode ? 'Active — strategic recovery focus' : 'For exams, deadlines, INTEX weeks'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setCrisisMode(!crisisMode)}
+              className={`relative w-12 h-7 rounded-full transition-colors ${crisisMode ? 'bg-crisis' : 'bg-muted'}`}
+            >
+              <div
+                className={`absolute top-1 w-5 h-5 rounded-full bg-card shadow transition-transform ${
+                  crisisMode ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+          {crisisMode && (
+            <div className="mt-3 text-xs text-foreground/80 space-y-1">
+              <p>• Goal shifts to "mitigate damage"</p>
+              <p>• Power nap & 90-min cycle suggestions enabled</p>
+              <p>• Streak penalties relaxed</p>
+            </div>
+          )}
+        </div>
+
+        {/* Dark Mode */}
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                {theme === 'dark' ? (
+                  <Sun className="w-5 h-5 text-warning" />
+                ) : (
+                  <Moon className="w-5 h-5 text-sleep" />
+                )}
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">Dark Mode</p>
+                <p className="text-xs text-muted-foreground">{theme === 'dark' ? 'Night theme active' : 'Switch to night theme'}</p>
+              </div>
+            </div>
+            <button
+              onClick={toggleTheme}
+              className={`relative w-12 h-7 rounded-full transition-colors ${theme === 'dark' ? 'bg-accent' : 'bg-muted'}`}
+            >
+              <div
+                className={`absolute top-1 w-5 h-5 rounded-full bg-card shadow transition-transform ${
+                  theme === 'dark' ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+
+        {/* Quick Adjustments */}
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <p className="text-sm font-semibold text-foreground mb-2">Quick Adjustments</p>
+          <div className="flex gap-2 flex-wrap">
+            {['Late night', 'Early morning', 'Traveling', 'Sick'].map((label) => (
+              <button
+                key={label}
+                className="text-xs bg-muted text-foreground rounded-full px-3 py-1.5 hover:bg-accent/10 hover:text-accent transition-colors"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-2">The app will adjust intelligently without breaking your streak.</p>
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">

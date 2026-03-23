@@ -5,7 +5,7 @@ const moods = [
   { emoji: '😐', label: 'Meh' },
   { emoji: '🙂', label: 'Okay' },
   { emoji: '😊', label: 'Good' },
-  { emoji: '⚡', label: 'Great' },
+  { emoji: '😄', label: 'Great' },
 ];
 
 const EmotionalCheckIn = () => {

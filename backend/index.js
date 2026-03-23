@@ -21,6 +21,8 @@ const frontendOrigins = (process.env.FRONTEND_URL || '')
 // Always allow common local dev origins (Vite may use localhost or 127.0.0.1).
 if (!frontendOrigins.includes('http://localhost:8080')) frontendOrigins.push('http://localhost:8080');
 if (!frontendOrigins.includes('http://127.0.0.1:8080')) frontendOrigins.push('http://127.0.0.1:8080');
+if (!frontendOrigins.includes('http://localhost:5173')) frontendOrigins.push('http://localhost:5173');
+if (!frontendOrigins.includes('http://127.0.0.1:5173')) frontendOrigins.push('http://127.0.0.1:5173');
 
 app.use(
   cors({

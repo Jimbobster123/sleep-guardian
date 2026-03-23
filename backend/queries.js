@@ -44,6 +44,7 @@ export async function createTask(userId, task) {
     planned_datetime,
     estimated_minutes,
     due_datetime,
+    category,
   } = task || {};
 
   if (typeof title !== 'string' || !title.trim()) {
@@ -54,23 +55,45 @@ export async function createTask(userId, task) {
   const estMinutes = Number.isFinite(estimated_minutes) ? estimated_minutes : 0;
   const safeStatus = typeof status === 'string' && status.trim().length > 0 ? status : 'pending';
 
-  const result = await pool.query(
-    `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING *`,
-    [
-      userId,
-      title.trim(),
-      asNullIfEmpty(notes),
-      prio,
-      safeStatus,
-      planned_datetime || null,
-      estMinutes,
-      due_datetime || null,
-    ]
-  );
-
-  return result.rows[0];
+  try {
+    const result = await pool.query(
+      `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        userId,
+        title.trim(),
+        asNullIfEmpty(notes),
+        prio,
+        safeStatus,
+        planned_datetime || null,
+        estMinutes,
+        due_datetime || null,
+        asNullIfEmpty(category),
+      ]
+    );
+    return result.rows[0];
+  } catch (err) {
+    if (err instanceof Error && err.message?.includes('category') && err.message?.includes('does not exist')) {
+      const result = await pool.query(
+        `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [
+          userId,
+          title.trim(),
+          asNullIfEmpty(notes),
+          prio,
+          safeStatus,
+          planned_datetime || null,
+          estMinutes,
+          due_datetime || null,
+        ]
+      );
+      return result.rows[0];
+    }
+    throw err;
+  }
 }
 
 export async function upsertTaskCalendarEvent(userId, task) {
@@ -78,10 +101,14 @@ export async function upsertTaskCalendarEvent(userId, task) {
 
   const minutes = Number(task.estimated_minutes || 0);
   const plannedStart = task.planned_datetime ? new Date(task.planned_datetime) : null;
-  const dueStart = task.due_datetime ? new Date(task.due_datetime) : null;
 
   let plannedUpdated = null;
-  let dueUpdated = null;
+
+  // Remove due-date calendar events; tasks only appear when planned
+  await pool.query(
+    `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
+    [userId, task.task_id, 'task_due']
+  );
 
   // Cleanup legacy combined task event entries (source='task').
   await pool.query(
@@ -147,66 +174,7 @@ export async function upsertTaskCalendarEvent(userId, task) {
     );
   }
 
-  // Due calendar event (fixed duration so it appears on the grid)
-  const dueDurationMinutes = 15;
-  if (dueStart && !Number.isNaN(dueStart.getTime())) {
-    const dueEnd = new Date(dueStart.getTime() + dueDurationMinutes * 60 * 1000);
-
-    const existing = await pool.query(
-      `SELECT event_id FROM "CalendarEvent"
-       WHERE user_id = $1 AND task_id = $2 AND source = $3
-       LIMIT 1`,
-      [userId, task.task_id, 'task_due']
-    );
-
-    if (existing.rows[0]) {
-      const result = await pool.query(
-        `UPDATE "CalendarEvent"
-         SET title = $3,
-             description = $4,
-             start_datetime = $5,
-             end_datetime = $6,
-             status = $7
-         WHERE event_id = $1 AND user_id = $2
-         RETURNING *`,
-        [
-          existing.rows[0].event_id,
-          userId,
-          asNullIfEmpty(task.title),
-          asNullIfEmpty(task.notes),
-          dueStart,
-          dueEnd,
-          asNullIfEmpty(task.status) || 'scheduled',
-        ]
-      );
-      dueUpdated = result.rows[0];
-    } else {
-      const result = await pool.query(
-        `INSERT INTO "CalendarEvent"
-         (user_id, task_id, title, description, start_datetime, end_datetime, status, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING *`,
-        [
-          userId,
-          task.task_id,
-          asNullIfEmpty(task.title),
-          asNullIfEmpty(task.notes),
-          dueStart,
-          dueEnd,
-          asNullIfEmpty(task.status) || 'scheduled',
-          'task_due',
-        ]
-      );
-      dueUpdated = result.rows[0];
-    }
-  } else {
-    await pool.query(
-      `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
-      [userId, task.task_id, 'task_due']
-    );
-  }
-
-  return plannedUpdated || dueUpdated;
+  return plannedUpdated;
 }
 
 // Get all users
@@ -238,8 +206,20 @@ export async function getUserById(userId) {
 
 // Update task
 export async function updateTask(taskId, updates) {
+  const { title, notes, priority, status, estimated_minutes, planned_datetime, due_datetime, category } = updates || {};
+  const params = [
+    title,
+    notes ?? null,
+    priority ?? 3,
+    status ?? 'pending',
+    Number.isFinite(estimated_minutes) ? estimated_minutes : 0,
+    planned_datetime || null,
+    due_datetime || null,
+    category ?? null,
+    taskId,
+  ];
+
   try {
-    const { title, notes, priority, status, estimated_minutes, planned_datetime, due_datetime } = updates;
     const result = await pool.query(
       `UPDATE "Task" 
        SET title = $1,
@@ -248,13 +228,30 @@ export async function updateTask(taskId, updates) {
            status = $4,
            estimated_minutes = $5,
            planned_datetime = $6,
-           due_datetime = $7
-       WHERE task_id = $8 
+           due_datetime = $7,
+           category = $8
+       WHERE task_id = $9 
        RETURNING *`,
-      [title, notes, priority, status, estimated_minutes, planned_datetime || null, due_datetime || null, taskId]
+      params
     );
     return result.rows[0];
   } catch (err) {
+    if (err instanceof Error && err.message?.includes('category') && err.message?.includes('does not exist')) {
+      const result = await pool.query(
+        `UPDATE "Task" 
+         SET title = $1,
+             notes = $2,
+             priority = $3,
+             status = $4,
+             estimated_minutes = $5,
+             planned_datetime = $6,
+             due_datetime = $7
+         WHERE task_id = $8 
+         RETURNING *`,
+        [params[0], params[1], params[2], params[3], params[4], params[5], params[6], taskId]
+      );
+      return result.rows[0];
+    }
     console.error('Error updating task:', err);
     throw err;
   }
