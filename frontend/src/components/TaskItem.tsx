@@ -1,6 +1,7 @@
 import { Pencil } from 'lucide-react';
 
 interface TaskItemProps {
+  taskId?: string;
   title: string;
   subtitle?: string; // notes
   category?: string | null;
@@ -10,10 +11,12 @@ interface TaskItemProps {
   completed?: boolean;
   nearBedtime?: boolean;
   onEdit?: () => void;
-  taskId?: string;
+  onToggleComplete?: (checked: boolean) => void | Promise<void>;
+  completing?: boolean;
 }
 
 const TaskItem = ({
+  taskId,
   title,
   subtitle,
   category,
@@ -23,7 +26,8 @@ const TaskItem = ({
   completed,
   nearBedtime,
   onEdit,
-  taskId,
+  onToggleComplete,
+  completing,
 }: TaskItemProps) => {
   const hasMeta = category || subtitle || plannedDate || dueDate;
   return (
@@ -33,8 +37,10 @@ const TaskItem = ({
       <input
         type="checkbox"
         checked={completed}
-        readOnly
-        className="w-4 h-4 rounded border-2 border-muted-foreground/40 accent-accent flex-shrink-0"
+        disabled={completing}
+        onChange={(e) => onToggleComplete?.(e.target.checked)}
+        aria-label={taskId ? `Mark task ${title} as completed` : `Mark ${title} as completed`}
+        className="w-4 h-4 rounded border-2 border-muted-foreground/40 accent-accent flex-shrink-0 cursor-pointer disabled:cursor-not-allowed"
       />
       <div className="flex-1 min-w-0">
         <p className={`text-sm font-medium ${completed ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
@@ -58,12 +64,14 @@ const TaskItem = ({
           {duration}m
         </span>
       )}
-      <button 
-        onClick={onEdit}
-        className="text-muted-foreground hover:text-foreground flex-shrink-0 transition-colors"
-      >
-        <Pencil className="w-3.5 h-3.5" />
-      </button>
+      {onEdit ? (
+        <button
+          onClick={onEdit}
+          className="text-muted-foreground hover:text-foreground flex-shrink-0 transition-colors"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
+      ) : null}
     </div>
   );
 };

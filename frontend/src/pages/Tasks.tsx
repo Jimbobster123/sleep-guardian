@@ -8,6 +8,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
 import { format } from 'date-fns';
+import { toast } from '@/components/ui/sonner';
 
 interface Task {
   task_id?: string;
@@ -46,6 +47,7 @@ const Tasks = () => {
   const [error, setError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [mode, setMode] = useState<'create' | 'edit'>('edit');
+  const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -128,18 +130,55 @@ const Tasks = () => {
     }
   };
 
+  const handleTaskCompletion = async (taskId: string | undefined, checked: boolean) => {
+    if (!token || !taskId) return;
+
+    const nextStatus = checked ? 'completed' : 'pending';
+    const previousTasks = tasks;
+
+    setUpdatingTaskId(taskId);
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.task_id === taskId ? { ...task, status: nextStatus } : task,
+      ),
+    );
+
+    try {
+      const updated = await apiJson<Task>(`/api/me/tasks/${taskId}/status`, {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify({ status: nextStatus }),
+      });
+
+      setTasks((prev) =>
+        prev.map((task) => (task.task_id === taskId ? updated : task)),
+      );
+
+      if (checked) {
+        toast.success('Task marked completed');
+      }
+    } catch (err) {
+      setTasks(previousTasks);
+      console.error('Error updating task status:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to update task status');
+    } finally {
+      setUpdatingTaskId(null);
+    }
+  };
+
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
 
-  type ViewMode = 'all' | 'due_today' | 'by_due_date' | 'by_priority';
+  type ViewMode = 'all' | 'due_today' | 'by_due_date' | 'by_priority' | 'completed';
   const [viewMode, setViewMode] = useState<ViewMode>('by_due_date');
 
-  const visibleTasks = tasks.filter((t) => t.status !== 'completed');
+  const activeTasks = tasks.filter((t) => t.status !== 'completed');
+  const completedTasks = tasks.filter((t) => t.status === 'completed');
 
   // Filter and sort based on view mode
   const displayedTasks = (() => {
-    let filtered = visibleTasks;
+    let filtered = activeTasks;
 
     if (viewMode === 'all') {
       return [...filtered].sort((a, b) => {
@@ -150,7 +189,7 @@ const Tasks = () => {
     }
 
     if (viewMode === 'due_today') {
-      filtered = visibleTasks
+      filtered = activeTasks
         .filter((t) => {
           if (!t.due_datetime) return false;
           const due = new Date(t.due_datetime).getTime();
@@ -180,6 +219,18 @@ const Tasks = () => {
         const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
         const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
         return aDue - bDue;
+      });
+    }
+
+    if (viewMode === 'completed') {
+      return [...completedTasks].sort((a, b) => {
+        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.NEGATIVE_INFINITY;
+        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.NEGATIVE_INFINITY;
+        if (aDue !== bDue) return bDue - aDue;
+
+        const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return bCreated - aCreated;
       });
     }
 
@@ -306,6 +357,16 @@ const Tasks = () => {
           >
             By Priority
           </button>
+          <button
+            onClick={() => setViewMode('completed')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              viewMode === 'completed'
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            Completed
+          </button>
         </div>
 
         {/* All tasks in one list */}
@@ -317,13 +378,16 @@ const Tasks = () => {
                 ? 'Tasks Due Today'
                 : viewMode === 'by_due_date'
                   ? 'Tasks by Due Date'
-                  : 'Tasks by Priority'}
+                  : viewMode === 'by_priority'
+                    ? 'Tasks by Priority'
+                    : 'Completed Tasks'}
           </h2>
           {displayedTasks.length > 0 ? (
             <div className="space-y-2">
               {displayedTasks.map((task) => (
                 <TaskItem
                   key={task.task_id}
+                  taskId={task.task_id}
                   title={task.title}
                   subtitle={task.notes}
                   category={task.category}
@@ -331,13 +395,19 @@ const Tasks = () => {
                   plannedDate={formatDateTime(task.planned_datetime)}
                   dueDate={formatDateTime(task.due_datetime)}
                   completed={task.status === 'completed'}
+                  completing={updatingTaskId === task.task_id}
+                  onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
                   onEdit={() => { setEditingTask(task); setMode('edit'); }}
                 />
               ))}
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">
-              {viewMode === 'due_today' ? 'No tasks due today.' : 'No tasks.'}
+              {viewMode === 'due_today'
+                ? 'No tasks due today.'
+                : viewMode === 'completed'
+                  ? 'No completed tasks yet.'
+                  : 'No tasks.'}
             </p>
           )}
         </div>
