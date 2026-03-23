@@ -24,8 +24,8 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
     <div className="min-h-screen bg-background">
       {/* Top navigation */}
       {!hideNav && (
-        <header className="sticky top-0 z-50 bg-background/90 backdrop-blur border-b border-border/50">
-          <div className="mx-auto w-full max-w-md md:max-w-5xl px-4 md:px-6 py-3">
+        <header className="sticky top-0 z-50 bg-header/95 backdrop-blur border-b border-border/50">
+          <div className="mx-auto w-full max-w-md md:max-w-5xl pl-2 pr-4 md:pl-3 md:pr-6 py-3">
             <div className="flex items-center justify-between gap-4">
               <button
                 onClick={() => navigate('/')}

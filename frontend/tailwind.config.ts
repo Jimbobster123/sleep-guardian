@@ -84,6 +84,9 @@ export default {
           mid: "hsl(var(--night-mid))",
           end: "hsl(var(--night-end))",
         },
+        header: {
+          DEFAULT: "hsl(var(--header-bg))",
+        },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",

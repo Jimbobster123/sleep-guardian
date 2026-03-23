@@ -62,6 +62,7 @@ CREATE TABLE "Task" (
   priority INTEGER,
   status VARCHAR(50),
   estimated_minutes INTEGER,
+  category VARCHAR(50),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES "User"(user_id) ON DELETE CASCADE
 );
