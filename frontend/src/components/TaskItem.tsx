@@ -1,6 +1,8 @@
-import { Pencil } from 'lucide-react';
+import { Pencil, Star } from 'lucide-react';
+import { priorityStarCount } from '@/lib/taskPriority';
 
 interface TaskItemProps {
+  taskId?: string;
   title: string;
   subtitle?: string; // notes
   category?: string | null;
@@ -8,12 +10,18 @@ interface TaskItemProps {
   plannedDate?: string; // formatted date string like "Feb 20, 3:00 PM"
   dueDate?: string; // formatted date string like "Feb 20"
   completed?: boolean;
+  /** Due date has passed and task is not completed */
+  pastDue?: boolean;
   nearBedtime?: boolean;
   onEdit?: () => void;
-  taskId?: string;
+  /** 1 = highest, 3 = lowest */
+  priority?: number;
+  onToggleComplete?: (checked: boolean) => void | Promise<void>;
+  completing?: boolean;
 }
 
 const TaskItem = ({
+  taskId,
   title,
   subtitle,
   category,
@@ -21,11 +29,15 @@ const TaskItem = ({
   plannedDate,
   dueDate,
   completed,
+  pastDue,
   nearBedtime,
   onEdit,
-  taskId,
+  priority,
+  onToggleComplete,
+  completing,
 }: TaskItemProps) => {
   const hasMeta = category || subtitle || plannedDate || dueDate;
+  const stars = priorityStarCount(priority);
   return (
     <div className={`flex items-center gap-3 py-3 px-1 border-b border-border/50 last:border-0 ${
       nearBedtime ? 'bg-warning-light rounded-lg px-3 -mx-2' : ''
@@ -33,13 +45,27 @@ const TaskItem = ({
       <input
         type="checkbox"
         checked={completed}
-        readOnly
-        className="w-4 h-4 rounded border-2 border-muted-foreground/40 accent-accent flex-shrink-0"
+        disabled={completing}
+        onChange={(e) => onToggleComplete?.(e.target.checked)}
+        aria-label={taskId ? `Mark task ${title} as completed` : `Mark ${title} as completed`}
+        className="w-4 h-4 rounded border-2 border-muted-foreground/40 accent-accent flex-shrink-0 cursor-pointer disabled:cursor-not-allowed"
       />
       <div className="flex-1 min-w-0">
-        <p className={`text-sm font-medium ${completed ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
-          {title}
-        </p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className={`text-sm font-medium ${completed ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
+            {title}
+          </p>
+          {stars > 0 && (
+            <span
+              className="inline-flex items-center gap-0.5 text-warning flex-shrink-0"
+              title={stars === 2 ? 'High priority' : 'Medium priority'}
+            >
+              {Array.from({ length: stars }).map((_, i) => (
+                <Star key={i} className="w-3.5 h-3.5 fill-warning text-warning" aria-hidden />
+              ))}
+            </span>
+          )}
+        </div>
         {hasMeta && (
           <div className="flex items-center gap-2 flex-wrap">
             {category && <p className="text-xs text-muted-foreground">{category}</p>}
@@ -58,12 +84,22 @@ const TaskItem = ({
           {duration}m
         </span>
       )}
-      <button 
-        onClick={onEdit}
-        className="text-muted-foreground hover:text-foreground flex-shrink-0 transition-colors"
-      >
-        <Pencil className="w-3.5 h-3.5" />
-      </button>
+      <div className="flex items-center gap-1 flex-shrink-0">
+        {pastDue && (
+          <span className="inline-flex shrink-0 items-center rounded-full border border-orange-500/35 bg-orange-500/10 px-2 py-0.5 text-[10px] font-semibold text-orange-700 dark:text-orange-400">
+            Late
+          </span>
+        )}
+        {onEdit ? (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="text-muted-foreground hover:text-foreground transition-colors p-0.5"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 };

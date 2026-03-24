@@ -1,9 +1,11 @@
 import PageHeader from '@/components/PageHeader';
-import { Sun, Moon, ChevronLeft, ChevronRight, Wand2, Plus, Calendar as CalendarIcon, CheckSquare, Clock3, Trash2 } from 'lucide-react';
+import { Sun, Moon, ChevronLeft, ChevronRight, Wand2, Plus, Calendar as CalendarIcon, CheckSquare, Clock3, Trash2, Star } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { format, addDays, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, eachDayOfInterval, isSameDay, isSameMonth, isToday } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
+import { isTaskPastDue } from '@/lib/taskOverdue';
+import { priorityStarCount } from '@/lib/taskPriority';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -30,7 +32,46 @@ type DbEvent = {
   is_all_day?: boolean | null;
   task_due_datetime?: string | null;
   recurrence_series_id?: string | null;
+  task_status?: string | null;
+  task_priority?: number | null;
 };
+
+function calendarTaskPastDue(e: DbEvent): boolean {
+  if (!(e.source === 'task_planned' || e.source === 'task_due') || !e.task_id) return false;
+  return isTaskPastDue(e.task_status ?? 'pending', e.task_due_datetime);
+}
+
+function LatePill({ compact }: { compact?: boolean }) {
+  return (
+    <span
+      className={
+        compact
+          ? 'inline-flex shrink-0 items-center rounded-full border border-orange-500/35 bg-orange-500/10 px-1 py-0 text-[9px] font-semibold text-orange-700 dark:text-orange-400'
+          : 'inline-flex shrink-0 items-center rounded-full border border-orange-500/35 bg-orange-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700 dark:text-orange-400'
+      }
+      aria-label="Late"
+    >
+      Late
+    </span>
+  );
+}
+
+function taskPriorityStars(event: DbEvent, compact: boolean) {
+  const n =
+    event.task_id && event.task_priority != null
+      ? priorityStarCount(Number(event.task_priority))
+      : 0;
+  if (n === 0) return null;
+  const size = compact ? 'w-2.5 h-2.5' : 'w-3.5 h-3.5';
+  const title = n === 2 ? 'High priority' : 'Medium priority';
+  return (
+    <span className="inline-flex items-center gap-0.5 text-warning flex-shrink-0" title={title}>
+      {Array.from({ length: n }).map((_, i) => (
+        <Star key={i} className={`${size} fill-warning text-warning`} aria-hidden />
+      ))}
+    </span>
+  );
+}
 
 type SleepGoalResponse = {
   goal: {
@@ -693,6 +734,7 @@ const CalendarPage = () => {
                           ) : inSleepWindow ? (
                             <Moon className="w-3.5 h-3.5" />
                           ) : null}
+                          {calendarTaskPastDue(event) && <LatePill />}
                           <span
                             className={`text-[10px] px-1.5 py-0.5 rounded-sm border ${
                               event.source === 'task_planned'
@@ -704,6 +746,7 @@ const CalendarPage = () => {
                           >
                             {event.source === 'task_planned' ? 'PLANNED TASK' : event.source === 'task_due' ? 'DUE DATE' : 'EVENT'}
                           </span>
+                          {taskPriorityStars(event, false)}
                           <span className="truncate">{event.title || 'Event'}</span>
                           <div className="ml-auto flex flex-col items-end gap-0.5 text-[10px] opacity-80">
                             {event.source === 'task_planned' && (
@@ -803,9 +846,11 @@ const CalendarPage = () => {
                               setEditingEventScope('single');
                             }
                           }}
-                          className={`w-full text-left rounded px-1.5 py-0.5 text-[10px] truncate ${getEventStyle(event.source)}`}
+                          className={`w-full text-left rounded px-1.5 py-0.5 text-[10px] truncate flex items-center gap-0.5 ${getEventStyle(event.source)}`}
                         >
-                          {event.title || 'Event'}
+                          {calendarTaskPastDue(event) && <LatePill compact />}
+                          {taskPriorityStars(event, true)}
+                          <span className="truncate">{event.title || 'Event'}</span>
                         </button>
                       ))}
                     </div>
@@ -882,9 +927,11 @@ const CalendarPage = () => {
                             setEditingEventScope('single');
                           }
                         }}
-                        className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate block ${getEventStyle(event.source)}`}
+                        className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate flex items-center gap-0.5 ${getEventStyle(event.source)}`}
                       >
-                        {event.title || 'Event'}
+                        {calendarTaskPastDue(event) && <LatePill compact />}
+                        {taskPriorityStars(event, true)}
+                        <span className="truncate">{event.title || 'Event'}</span>
                       </button>
                     ))}
                     {more > 0 && (

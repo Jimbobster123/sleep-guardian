@@ -44,7 +44,13 @@ export default function RequireAuth({
     };
   }, [loading, token, user, nav, loc.pathname, requireSleepSetup]);
 
-  if (loading) return null;
+  if (loading) {
+    return (
+      <div className="min-h-[40vh] flex items-center justify-center px-4">
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </div>
+    );
+  }
   if (!token || !user) return null;
   if (requireSleepSetup && !checkedSleep) return null;
   return <>{children}</>;

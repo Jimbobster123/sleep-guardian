@@ -7,7 +7,9 @@ import { useApp } from '@/contexts/AppContext';
 import { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
+import { isTaskPastDue } from '@/lib/taskOverdue';
 import { format } from 'date-fns';
+import { toast } from '@/components/ui/sonner';
 
 interface Task {
   task_id?: string;
@@ -51,6 +53,7 @@ const Tasks = () => {
   const [error, setError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [mode, setMode] = useState<'create' | 'edit'>('edit');
+  const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -145,29 +148,96 @@ const Tasks = () => {
     }
   };
 
+  const handleTaskCompletion = async (taskId: string | undefined, checked: boolean) => {
+    if (!token || !taskId) return;
+
+    const nextStatus = checked ? 'completed' : 'pending';
+    const previousTasks = tasks;
+
+    setUpdatingTaskId(taskId);
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.task_id === taskId ? { ...task, status: nextStatus } : task,
+      ),
+    );
+
+    try {
+      const updated = await apiJson<Task>(`/api/me/tasks/${taskId}/status`, {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify({ status: nextStatus }),
+      });
+
+      setTasks((prev) =>
+        prev.map((task) => (task.task_id === taskId ? updated : task)),
+      );
+
+      if (checked) {
+        toast.success('Task marked completed');
+      }
+    } catch (err) {
+      setTasks(previousTasks);
+      console.error('Error updating task status:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to update task status');
+    } finally {
+      setUpdatingTaskId(null);
+    }
+  };
+
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
 
-  type ListScope = 'all' | 'due_today';
-  type OrganizeBy = 'due_date' | 'priority' | 'category';
+  type ViewMode = 'all' | 'due_today' | 'passed' | 'by_due_date' | 'by_priority' | 'completed';
+  const [viewMode, setViewMode] = useState<ViewMode>('by_due_date');
 
-  const [listScope, setListScope] = useState<ListScope>('all');
-  const [organizeBy, setOrganizeBy] = useState<OrganizeBy>('due_date');
+  const activeTasks = tasks.filter((t) => t.status !== 'completed');
+  const completedTasks = tasks.filter((t) => t.status === 'completed');
 
-  const organizeLabels: Record<OrganizeBy, string> = {
-    due_date: 'Due date',
-    priority: 'Priority',
-    category: 'Category',
-  };
+  // Filter and sort based on view mode
+  const displayedTasks = (() => {
+    let filtered = activeTasks;
 
-  const cycleOrganize = () => {
-    setOrganizeBy((prev) => {
-      if (prev === 'due_date') return 'priority';
-      if (prev === 'priority') return 'category';
-      return 'due_date';
-    });
-  };
+    if (viewMode === 'all') {
+      return [...filtered].sort((a, b) => {
+        const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return aCreated - bCreated; // oldest first (order of creation)
+      });
+    }
+
+    if (viewMode === 'due_today') {
+      filtered = activeTasks
+        .filter((t) => {
+          if (!t.due_datetime) return false;
+          const due = new Date(t.due_datetime).getTime();
+          return due >= startOfToday && due <= endOfToday;
+        })
+        .sort((a, b) => {
+          const aDue = new Date(a.due_datetime!).getTime();
+          const bDue = new Date(b.due_datetime!).getTime();
+          return aDue - bDue;
+        });
+      return filtered;
+    }
+
+    if (viewMode === 'passed') {
+      return activeTasks
+        .filter((t) => isTaskPastDue(t.status, t.due_datetime))
+        .sort((a, b) => {
+          const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : 0;
+          const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : 0;
+          return aDue - bDue; // oldest overdue first
+        });
+    }
+
+    if (viewMode === 'by_due_date') {
+      return [...filtered].sort((a, b) => {
+        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+        return aDue - bDue; // earliest first, no due date at bottom
+      });
+    }
 
   const displayedTasks = useMemo(() => {
     const visibleTasks = tasks.filter((t) => t.status !== 'completed');
@@ -206,6 +276,18 @@ const Tasks = () => {
       filtered.sort(byPriorityThenDue);
     } else {
       filtered.sort(byCategoryThenDue);
+    }
+
+    if (viewMode === 'completed') {
+      return [...completedTasks].sort((a, b) => {
+        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.NEGATIVE_INFINITY;
+        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.NEGATIVE_INFINITY;
+        if (aDue !== bDue) return bDue - aDue;
+
+        const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return bCreated - aCreated;
+      });
     }
 
     return filtered;
@@ -311,72 +393,95 @@ const Tasks = () => {
                 : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
             }`}
           >
-            Due today
+            Due Today
           </button>
-
-          {/* Sort segmented toggle (only these three) */}
-          <div className="rounded-xl border border-border bg-muted/40 p-1 flex gap-1">
-            <button
-              type="button"
-              onClick={() => setOrganizeBy('due_date')}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                organizeBy === 'due_date'
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-              }`}
-            >
-              Due date
-            </button>
-            <button
-              type="button"
-              onClick={() => setOrganizeBy('priority')}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                organizeBy === 'priority'
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-              }`}
-            >
-              Priority
-            </button>
-            <button
-              type="button"
-              onClick={() => setOrganizeBy('category')}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                organizeBy === 'category'
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-              }`}
-            >
-              Category
-            </button>
-          </div>
+          <button
+            onClick={() => setViewMode('passed')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              viewMode === 'passed'
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            Passed
+          </button>
+          <button
+            onClick={() => setViewMode('by_due_date')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              viewMode === 'by_due_date'
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            By Due Date
+          </button>
+          <button
+            onClick={() => setViewMode('by_priority')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              viewMode === 'by_priority'
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            By Priority
+          </button>
+          <button
+            onClick={() => setViewMode('completed')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              viewMode === 'completed'
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            Completed
+          </button>
         </div>
 
         {/* All tasks in one list */}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <h2 className="text-sm font-semibold text-foreground mb-2">
-            {listScope === 'all' ? 'All tasks' : 'Due today'}
-            <span className="text-muted-foreground font-normal"> · {organizeLabels[organizeBy]}</span>
+            {viewMode === 'all'
+              ? 'All Tasks'
+              : viewMode === 'due_today'
+                ? 'Tasks Due Today'
+                : viewMode === 'passed'
+                  ? 'Passed — overdue and not completed'
+                  : viewMode === 'by_due_date'
+                  ? 'Tasks by Due Date'
+                  : viewMode === 'by_priority'
+                    ? 'Tasks by Priority'
+                    : 'Completed Tasks'}
           </h2>
           {displayedTasks.length > 0 ? (
             <div className="space-y-2">
               {displayedTasks.map((task) => (
                 <TaskItem
                   key={task.task_id}
+                  taskId={task.task_id}
                   title={task.title}
                   subtitle={task.notes}
                   category={task.category}
+                  priority={task.priority}
                   duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
                   plannedDate={formatDateTime(task.planned_datetime)}
                   dueDate={formatDateTime(task.due_datetime)}
                   completed={task.status === 'completed'}
+                  pastDue={isTaskPastDue(task.status, task.due_datetime)}
+                  completing={updatingTaskId === task.task_id}
+                  onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
                   onEdit={() => { setEditingTask(task); setMode('edit'); }}
                 />
               ))}
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">
-              {listScope === 'due_today' ? 'No tasks due today.' : 'No tasks.'}
+              {viewMode === 'due_today'
+                ? 'No tasks due today.'
+                : viewMode === 'passed'
+                  ? 'No overdue tasks — you’re all caught up.'
+                  : viewMode === 'completed'
+                    ? 'No completed tasks yet.'
+                    : 'No tasks.'}
             </p>
           )}
         </div>

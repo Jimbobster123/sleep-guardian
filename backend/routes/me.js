@@ -21,6 +21,7 @@ import {
   getCalendarEventsBySeriesId,
   updateCalendarEvent,
   updateTask,
+  updateTaskStatus,
   updateUserProfile,
   upsertImportedCalendarEvent,
   upsertSleepWindow,
@@ -387,6 +388,19 @@ router.delete('/tasks/:taskId', requireAuth, async (req, res) => {
     res.json({ ok: true, deleted_task_ids: [deleted.task_id] });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete task', details: err.message });
+router.patch('/tasks/:taskId/status', requireAuth, async (req, res) => {
+  try {
+    const nextStatus = typeof req.body?.status === 'string' ? req.body.status : 'completed';
+    const updated = await updateTaskStatus(req.params.taskId, req.user.user_id, nextStatus);
+    if (!updated) return res.status(404).json({ error: 'Task not found' });
+    try {
+      await upsertTaskCalendarEvent(req.user.user_id, updated);
+    } catch (calendarErr) {
+      console.error('Calendar sync failed for task status update:', calendarErr);
+    }
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update task status', details: err.message });
   }
 });
 
