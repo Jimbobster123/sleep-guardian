@@ -29,6 +29,7 @@ type DbEvent = {
   source: string | null;
   is_all_day?: boolean | null;
   task_due_datetime?: string | null;
+  recurrence_series_id?: string | null;
 };
 
 type SleepGoalResponse = {
@@ -61,6 +62,8 @@ type Task = {
   estimated_minutes: number;
   planned_datetime?: string;
   due_datetime?: string;
+  recurrence_series_id?: string | null;
+  edit_scope?: 'single' | 'series';
 };
 
 function fmtPgLocal(ts?: string | null) {
@@ -97,7 +100,11 @@ const CalendarPage = () => {
   const [createStartTime, setCreateStartTime] = useState('09:00');
   const [createEndTime, setCreateEndTime] = useState('10:00');
   const [createAllDay, setCreateAllDay] = useState(false);
+  const [createRepeat, setCreateRepeat] = useState<'none' | 'daily' | 'weekdays' | 'weekly'>('none');
+  const [createRepeatCount, setCreateRepeatCount] = useState(5);
+  const [createRepeatUntil, setCreateRepeatUntil] = useState('');
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingEvent, setEditingEvent] = useState<DbEvent | null>(null);
   const [editingEventTitle, setEditingEventTitle] = useState('');
@@ -105,6 +112,7 @@ const CalendarPage = () => {
   const [editingEventStart, setEditingEventStart] = useState('');
   const [editingEventEnd, setEditingEventEnd] = useState('');
   const [editingEventAllDay, setEditingEventAllDay] = useState(false);
+  const [editingEventScope, setEditingEventScope] = useState<'single' | 'series'>('single');
   const [savingEvent, setSavingEvent] = useState(false);
 
   const dateStr = useMemo(() => format(day, 'yyyy-MM-dd'), [day]);
@@ -475,6 +483,45 @@ const CalendarPage = () => {
                       </div>
                     </div>
                   </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="space-y-1 sm:col-span-1">
+                      <label className="text-[10px] text-muted-foreground">Repeat</label>
+                      <select
+                        className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                        value={createRepeat}
+                        onChange={(e) => setCreateRepeat(e.target.value as typeof createRepeat)}
+                      >
+                        <option value="none">Does not repeat</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekdays">Weekdays</option>
+                        <option value="weekly">Weekly</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground">Occurrences</label>
+                      <Input
+                        type="number"
+                        min="1"
+                        max="365"
+                        value={createRepeatCount}
+                        onChange={(e) => setCreateRepeatCount(parseInt(e.target.value, 10) || 1)}
+                        disabled={createRepeat === 'none' || Boolean(createRepeatUntil)}
+                        className="h-9"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground">Repeat until</label>
+                      <Input
+                        type="date"
+                        value={createRepeatUntil}
+                        onChange={(e) => setCreateRepeatUntil(e.target.value)}
+                        disabled={createRepeat === 'none'}
+                        className="h-9"
+                      />
+                    </div>
+                  </div>
+                  {createError && <p className="text-xs text-destructive">{createError}</p>}
                 </div>
 
                 <DialogFooter>
@@ -485,11 +532,12 @@ const CalendarPage = () => {
                     onClick={async () => {
                       if (!token) return;
                       setCreating(true);
+                      setCreateError(null);
                       try {
                         const title = createTitle.trim();
                         const start = createAllDay ? `${dateStr}T00:00:00` : `${dateStr}T${createStartTime}:00`;
                         const end = createAllDay ? `${dateStr}T23:59:59` : `${dateStr}T${createEndTime}:00`;
-                        const created = await apiJson<DbEvent>('/api/me/calendar-events', {
+                        const created = await apiJson<DbEvent | { events: DbEvent[] }>('/api/me/calendar-events', {
                           method: 'POST',
                           token,
                           body: JSON.stringify({
@@ -500,15 +548,27 @@ const CalendarPage = () => {
                             is_all_day: createAllDay,
                             source: 'manual',
                             status: 'scheduled',
+                            repeat: createRepeat,
+                            repeat_count: createRepeatCount,
+                            repeat_until: createRepeatUntil || null,
                           }),
                         });
-                        setEvents((prev) => [...prev, created]);
+                        if ('events' in created && Array.isArray(created.events)) {
+                          setEvents((prev) => [...prev, ...created.events]);
+                        } else {
+                          setEvents((prev) => [...prev, created]);
+                        }
                         setCreateOpen(false);
                         setCreateTitle('');
                         setCreateDescription('');
                         setCreateStartTime('09:00');
                         setCreateEndTime('10:00');
                         setCreateAllDay(false);
+                        setCreateRepeat('none');
+                        setCreateRepeatCount(5);
+                        setCreateRepeatUntil('');
+                      } catch (err) {
+                        setCreateError(err instanceof Error ? err.message : 'Failed to create event');
                       } finally {
                         setCreating(false);
                       }
@@ -618,6 +678,7 @@ const CalendarPage = () => {
                             setEditingEventStart(toLocalInput(event.start_datetime));
                             setEditingEventEnd(toLocalInput(event.end_datetime));
                             setEditingEventAllDay(Boolean(event.is_all_day));
+                            setEditingEventScope('single');
                           }
                         }}
                         className={`w-full text-left rounded-md px-2.5 py-1.5 text-xs font-medium ${getEventStyle(event.source)} mb-1`}
@@ -739,6 +800,7 @@ const CalendarPage = () => {
                               setEditingEventStart(toLocalInput(event.start_datetime));
                               setEditingEventEnd(toLocalInput(event.end_datetime));
                               setEditingEventAllDay(Boolean(event.is_all_day));
+                              setEditingEventScope('single');
                             }
                           }}
                           className={`w-full text-left rounded px-1.5 py-0.5 text-[10px] truncate ${getEventStyle(event.source)}`}
@@ -817,6 +879,7 @@ const CalendarPage = () => {
                             setEditingEventStart(toLocalInput(event.start_datetime));
                             setEditingEventEnd(toLocalInput(event.end_datetime));
                             setEditingEventAllDay(Boolean(event.is_all_day));
+                            setEditingEventScope('single');
                           }
                         }}
                         className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate block ${getEventStyle(event.source)}`}
@@ -901,12 +964,36 @@ const CalendarPage = () => {
           onClose={() => setEditingTask(null)}
           onSave={async (updated) => {
             if (!token) throw new Error('Not authenticated');
-            await apiJson(`/api/me/tasks/${updated.task_id}`, {
-              method: 'PUT',
+            await apiJson<Task | { tasks: Task[] }>(
+              `/api/me/tasks/${updated.task_id}?scope=${encodeURIComponent(updated.edit_scope || 'single')}`,
+              {
+                method: 'PUT',
+                token,
+                body: JSON.stringify({
+                  title: updated.title,
+                  notes: updated.notes,
+                  priority: updated.priority,
+                  status: updated.status,
+                  planned_datetime: updated.planned_datetime,
+                  estimated_minutes: updated.estimated_minutes,
+                  due_datetime: updated.due_datetime,
+                  category: updated.category || null,
+                }),
+              },
+            );
+            // Refresh events so calendar reflects changes (use full fetch range for recurring tasks)
+            const evRes = await apiJson<DbEvent[]>(
+              `/api/me/calendar-events?from=${encodeURIComponent(`${fetchRange.from} 00:00:00`)}&to=${encodeURIComponent(`${fetchRange.to} 00:00:00`)}`,
+              { token },
+            );
+            setEvents(evRes);
+          }}
+          onDelete={async (task) => {
+            if (!token || !task.task_id) throw new Error('Task not found');
+            await apiJson(`/api/me/tasks/${task.task_id}?scope=${encodeURIComponent(task.edit_scope || 'single')}`, {
+              method: 'DELETE',
               token,
-              body: JSON.stringify(updated),
             });
-            // Refresh events so calendar reflects changes
             const evRes = await apiJson<DbEvent[]>(
               `/api/me/calendar-events?from=${encodeURIComponent(`${dateStr} 00:00:00`)}&to=${encodeURIComponent(
                 `${format(addDays(day, 2), 'yyyy-MM-dd')} 00:00:00`,
@@ -979,6 +1066,19 @@ const CalendarPage = () => {
                 </div>
               </div>
             </div>
+            {editingEvent?.recurrence_series_id ? (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-foreground">Apply changes to</label>
+                <select
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={editingEventScope}
+                  onChange={(e) => setEditingEventScope(e.target.value as 'single' | 'series')}
+                >
+                  <option value="single">Only this event</option>
+                  <option value="series">All events in this series</option>
+                </select>
+              </div>
+            ) : null}
           </div>
           <DialogFooter className="justify-between">
             <Button
@@ -990,11 +1090,16 @@ const CalendarPage = () => {
                 if (!token || !editingEvent) return;
                 setSavingEvent(true);
                 try {
-                  await apiJson(`/api/me/calendar-events/${editingEvent.event_id}`, {
+                  const deleted = await apiJson<{ deleted_event_ids?: string[] }>(`/api/me/calendar-events/${editingEvent.event_id}?scope=${encodeURIComponent(editingEventScope)}`, {
                     method: 'DELETE',
                     token,
                   });
-                  setEvents((prev) => prev.filter((e) => e.event_id !== editingEvent.event_id));
+                  if (Array.isArray(deleted.deleted_event_ids) && deleted.deleted_event_ids.length) {
+                    const deletedSet = new Set(deleted.deleted_event_ids);
+                    setEvents((prev) => prev.filter((e) => !deletedSet.has(e.event_id)));
+                  } else {
+                    setEvents((prev) => prev.filter((e) => e.event_id !== editingEvent.event_id));
+                  }
                   setEditingEvent(null);
                 } finally {
                   setSavingEvent(false);
@@ -1022,7 +1127,7 @@ const CalendarPage = () => {
                   try {
                     const toPgTimestamp = (v: string) =>
                       v && v.includes('T') ? v.replace('T', ' ') + ':00' : v || null;
-                    const updated = await apiJson<DbEvent>(`/api/me/calendar-events/${editingEvent.event_id}`, {
+                    const updated = await apiJson<DbEvent | { events: DbEvent[] }>(`/api/me/calendar-events/${editingEvent.event_id}?scope=${encodeURIComponent(editingEventScope)}`, {
                       method: 'PUT',
                       token,
                       body: JSON.stringify({
@@ -1033,7 +1138,12 @@ const CalendarPage = () => {
                         is_all_day: editingEventAllDay,
                       }),
                     });
-                    setEvents((prev) => prev.map((e) => (e.event_id === updated.event_id ? updated : e)));
+                    if ('events' in updated && Array.isArray(updated.events)) {
+                      const byId = new Map(updated.events.map((ev) => [ev.event_id, ev]));
+                      setEvents((prev) => prev.map((e) => byId.get(e.event_id) || e));
+                    } else {
+                      setEvents((prev) => prev.map((e) => (e.event_id === updated.event_id ? updated : e)));
+                    }
                     setEditingEvent(null);
                   } finally {
                     setSavingEvent(false);

@@ -92,6 +92,7 @@ export default function OnboardingSleepGoal() {
           </div>
 
           <SleepGoalForm
+            centerSubmit
             initial={{
               goal_type: initial?.goal?.goal_type,
               target_sleep_minutes: initial?.goal?.target_sleep_minutes,

@@ -7,6 +7,24 @@ function asNullIfEmpty(v) {
   return s.length === 0 ? null : v;
 }
 
+/** Local wall-clock timestamp for PostgreSQL TIMESTAMP columns (avoids JS Date → driver TZ drift). */
+function toPgTimestampLocal(date) {
+  if (!date || !(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+}
+
+function coalesceEstimatedMinutes(v) {
+  if (v === undefined || v === null) return undefined;
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
 // Get all tasks for a user
 export async function getUserTasks(userId) {
   try {
@@ -35,6 +53,16 @@ export async function getTaskById(taskId) {
   }
 }
 
+export async function getTasksBySeriesId(userId, recurrenceSeriesId) {
+  const result = await pool.query(
+    `SELECT * FROM "Task"
+     WHERE user_id = $1 AND recurrence_series_id = $2
+     ORDER BY planned_datetime ASC NULLS LAST, created_at ASC`,
+    [userId, recurrenceSeriesId]
+  );
+  return result.rows;
+}
+
 export async function createTask(userId, task) {
   const {
     title,
@@ -45,6 +73,7 @@ export async function createTask(userId, task) {
     estimated_minutes,
     due_datetime,
     category,
+    recurrence_series_id,
   } = task || {};
 
   if (typeof title !== 'string' || !title.trim()) {
@@ -52,13 +81,13 @@ export async function createTask(userId, task) {
   }
 
   const prio = Number.isFinite(priority) ? priority : 3;
-  const estMinutes = Number.isFinite(estimated_minutes) ? estimated_minutes : 0;
+  const estMinutes = coalesceEstimatedMinutes(estimated_minutes) ?? 0;
   const safeStatus = typeof status === 'string' && status.trim().length > 0 ? status : 'pending';
 
   try {
     const result = await pool.query(
-      `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, category, recurrence_series_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [
         userId,
@@ -70,14 +99,15 @@ export async function createTask(userId, task) {
         estMinutes,
         due_datetime || null,
         asNullIfEmpty(category),
+        recurrence_series_id || null,
       ]
     );
     return result.rows[0];
   } catch (err) {
-    if (err instanceof Error && err.message?.includes('category') && err.message?.includes('does not exist')) {
+    if (err instanceof Error && err.message?.includes('recurrence_series_id') && err.message?.includes('does not exist')) {
       const result = await pool.query(
-        `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, category)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
         [
           userId,
@@ -88,6 +118,26 @@ export async function createTask(userId, task) {
           planned_datetime || null,
           estMinutes,
           due_datetime || null,
+          asNullIfEmpty(category),
+        ]
+      );
+      return result.rows[0];
+    }
+    if (err instanceof Error && err.message?.includes('category') && err.message?.includes('does not exist')) {
+      const result = await pool.query(
+        `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, recurrence_series_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING *`,
+        [
+          userId,
+          title.trim(),
+          asNullIfEmpty(notes),
+          prio,
+          safeStatus,
+          planned_datetime || null,
+          estMinutes,
+          due_datetime || null,
+          recurrence_series_id || null,
         ]
       );
       return result.rows[0];
@@ -99,8 +149,15 @@ export async function createTask(userId, task) {
 export async function upsertTaskCalendarEvent(userId, task) {
   if (!task || !task.task_id) return null;
 
-  const minutes = Number(task.estimated_minutes || 0);
-  const plannedStart = task.planned_datetime ? new Date(task.planned_datetime) : null;
+  const minutes = Math.max(0, Math.round(Number(task.estimated_minutes || 0)));
+  let plannedStart = null;
+  if (task.planned_datetime) {
+    plannedStart = new Date(task.planned_datetime);
+    if (Number.isNaN(plannedStart.getTime()) && typeof task.planned_datetime === 'string') {
+      const s = task.planned_datetime.includes(' ') ? task.planned_datetime.replace(' ', 'T') : task.planned_datetime;
+      plannedStart = new Date(s);
+    }
+  }
 
   let plannedUpdated = null;
 
@@ -119,6 +176,8 @@ export async function upsertTaskCalendarEvent(userId, task) {
   // Planned calendar event
   if (plannedStart && !Number.isNaN(plannedStart.getTime()) && minutes > 0) {
     const plannedEnd = new Date(plannedStart.getTime() + minutes * 60 * 1000);
+    const startStr = toPgTimestampLocal(plannedStart);
+    const endStr = toPgTimestampLocal(plannedEnd);
 
     const existing = await pool.query(
       `SELECT event_id FROM "CalendarEvent"
@@ -142,8 +201,8 @@ export async function upsertTaskCalendarEvent(userId, task) {
           userId,
           asNullIfEmpty(task.title),
           asNullIfEmpty(task.notes),
-          plannedStart,
-          plannedEnd,
+          startStr,
+          endStr,
           asNullIfEmpty(task.status) || 'scheduled',
         ]
       );
@@ -159,8 +218,8 @@ export async function upsertTaskCalendarEvent(userId, task) {
           task.task_id,
           asNullIfEmpty(task.title),
           asNullIfEmpty(task.notes),
-          plannedStart,
-          plannedEnd,
+          startStr,
+          endStr,
           asNullIfEmpty(task.status) || 'scheduled',
           'task_planned',
         ]
@@ -207,12 +266,16 @@ export async function getUserById(userId) {
 // Update task
 export async function updateTask(taskId, updates) {
   const { title, notes, priority, status, estimated_minutes, planned_datetime, due_datetime, category } = updates || {};
+  const est =
+    estimated_minutes === undefined || estimated_minutes === null
+      ? 0
+      : coalesceEstimatedMinutes(estimated_minutes) ?? 0;
   const params = [
     title,
     notes ?? null,
     priority ?? 3,
     status ?? 'pending',
-    Number.isFinite(estimated_minutes) ? estimated_minutes : 0,
+    est,
     planned_datetime || null,
     due_datetime || null,
     category ?? null,
@@ -255,6 +318,24 @@ export async function updateTask(taskId, updates) {
     console.error('Error updating task:', err);
     throw err;
   }
+}
+
+export async function deleteTask(userId, taskId) {
+  const result = await pool.query(
+    `DELETE FROM "Task" WHERE user_id = $1 AND task_id = $2 RETURNING *`,
+    [userId, taskId]
+  );
+  return result.rows[0];
+}
+
+export async function deleteTasksBySeriesId(userId, recurrenceSeriesId) {
+  const result = await pool.query(
+    `DELETE FROM "Task"
+     WHERE user_id = $1 AND recurrence_series_id = $2
+     RETURNING *`,
+    [userId, recurrenceSeriesId]
+  );
+  return result.rows;
 }
 
 export async function getUserByEmail(email) {
@@ -435,6 +516,7 @@ export async function getCalendarEvents(userId, { from, to } = {}) {
        ce.source,
        ce.external_uid,
        ce.is_all_day,
+       ce.recurrence_series_id,
        t.due_datetime AS task_due_datetime
      FROM "CalendarEvent" ce
      LEFT JOIN "Task" t ON t.task_id = ce.task_id
@@ -445,15 +527,55 @@ export async function getCalendarEvents(userId, { from, to } = {}) {
   return result.rows;
 }
 
+export async function getConflictingCalendarEvents(userId, { start, end, excludeEventId, excludeTaskId } = {}) {
+  if (!start || !end) return [];
+  const params = [userId, start, end];
+  const where = [
+    'ce.user_id = $1',
+    'ce.start_datetime < $3',
+    'ce.end_datetime > $2',
+  ];
+
+  if (excludeEventId) {
+    params.push(excludeEventId);
+    where.push(`ce.event_id <> $${params.length}`);
+  }
+  if (excludeTaskId) {
+    params.push(excludeTaskId);
+    where.push(`(ce.task_id IS NULL OR ce.task_id <> $${params.length})`);
+  }
+
+  const result = await pool.query(
+    `SELECT ce.event_id, ce.task_id, ce.title, ce.start_datetime, ce.end_datetime, ce.source
+     FROM "CalendarEvent" ce
+     WHERE ${where.join(' AND ')}
+     ORDER BY ce.start_datetime ASC`,
+    params
+  );
+  return result.rows;
+}
+
 export async function getCalendarEventById(userId, eventId) {
   const result = await pool.query(
     `SELECT event_id, user_id, title, description, start_datetime, end_datetime, status, source,
-            external_uid, is_all_day, google_event_id
+            external_uid, is_all_day, google_event_id, recurrence_series_id
      FROM "CalendarEvent"
      WHERE event_id = $1 AND user_id = $2`,
     [eventId, userId]
   );
   return result.rows[0];
+}
+
+export async function getCalendarEventsBySeriesId(userId, recurrenceSeriesId) {
+  const result = await pool.query(
+    `SELECT event_id, user_id, task_id, title, description, start_datetime, end_datetime, status, source,
+            external_uid, is_all_day, google_event_id, recurrence_series_id
+     FROM "CalendarEvent"
+     WHERE user_id = $1 AND recurrence_series_id = $2
+     ORDER BY start_datetime ASC`,
+    [userId, recurrenceSeriesId]
+  );
+  return result.rows;
 }
 
 export async function createCalendarEvent(userId, event) {
@@ -467,27 +589,54 @@ export async function createCalendarEvent(userId, event) {
     source,
     external_uid,
     is_all_day,
+    recurrence_series_id,
   } = event;
 
-  const result = await pool.query(
-    `INSERT INTO "CalendarEvent"
-      (user_id, task_id, title, description, start_datetime, end_datetime, status, source, external_uid, is_all_day)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     RETURNING *`,
-    [
-      userId,
-      task_id || null,
-      asNullIfEmpty(title),
-      asNullIfEmpty(description),
-      start_datetime || null,
-      end_datetime || null,
-      asNullIfEmpty(status) || 'scheduled',
-      asNullIfEmpty(source) || 'manual',
-      asNullIfEmpty(external_uid),
-      typeof is_all_day === 'boolean' ? is_all_day : false,
-    ]
-  );
-  return result.rows[0];
+  try {
+    const result = await pool.query(
+      `INSERT INTO "CalendarEvent"
+        (user_id, task_id, title, description, start_datetime, end_datetime, status, source, external_uid, is_all_day, recurrence_series_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING *`,
+      [
+        userId,
+        task_id || null,
+        asNullIfEmpty(title),
+        asNullIfEmpty(description),
+        start_datetime || null,
+        end_datetime || null,
+        asNullIfEmpty(status) || 'scheduled',
+        asNullIfEmpty(source) || 'manual',
+        asNullIfEmpty(external_uid),
+        typeof is_all_day === 'boolean' ? is_all_day : false,
+        recurrence_series_id || null,
+      ]
+    );
+    return result.rows[0];
+  } catch (err) {
+    if (err instanceof Error && err.message?.includes('recurrence_series_id') && err.message?.includes('does not exist')) {
+      const result = await pool.query(
+        `INSERT INTO "CalendarEvent"
+          (user_id, task_id, title, description, start_datetime, end_datetime, status, source, external_uid, is_all_day)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING *`,
+        [
+          userId,
+          task_id || null,
+          asNullIfEmpty(title),
+          asNullIfEmpty(description),
+          start_datetime || null,
+          end_datetime || null,
+          asNullIfEmpty(status) || 'scheduled',
+          asNullIfEmpty(source) || 'manual',
+          asNullIfEmpty(external_uid),
+          typeof is_all_day === 'boolean' ? is_all_day : false,
+        ]
+      );
+      return result.rows[0];
+    }
+    throw err;
+  }
 }
 
 export async function updateCalendarEvent(userId, eventId, updates) {

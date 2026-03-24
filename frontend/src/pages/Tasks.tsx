@@ -20,6 +20,11 @@ interface Task {
   due_datetime?: string;
   created_at?: string;
   category?: string | null;
+  repeat?: 'none' | 'daily' | 'weekdays' | 'weekly';
+  repeat_count?: number;
+  repeat_until?: string;
+  recurrence_series_id?: string | null;
+  edit_scope?: 'single' | 'series';
 }
 
 type SleepGoalResponse = {
@@ -85,7 +90,7 @@ const Tasks = () => {
 
       if (!updatedTask.task_id) {
         // Create
-        const created = await apiJson<Task>('/api/me/tasks', {
+        const created = await apiJson<Task | { tasks: Task[] }>('/api/me/tasks', {
           method: 'POST',
           token,
           body: JSON.stringify({
@@ -97,30 +102,42 @@ const Tasks = () => {
             estimated_minutes: updatedTask.estimated_minutes,
             due_datetime: updatedTask.due_datetime,
             category: updatedTask.category || null,
+            repeat: updatedTask.repeat || 'none',
+            repeat_count: updatedTask.repeat_count || 1,
+            repeat_until: updatedTask.repeat_until || null,
           }),
         });
-        setTasks((prev) => [...prev, created]);
+        if ('tasks' in created && Array.isArray(created.tasks)) {
+          setTasks((prev) => [...prev, ...created.tasks]);
+        } else {
+          setTasks((prev) => [...prev, created]);
+        }
       } else {
         // Update
-        await apiJson(`/api/me/tasks/${updatedTask.task_id}`, {
-          method: 'PUT',
-          token,
-          body: JSON.stringify({
-            title: updatedTask.title,
-            notes: updatedTask.notes,
-            priority: updatedTask.priority,
-            status: updatedTask.status,
-            planned_datetime: updatedTask.planned_datetime,
-            estimated_minutes: updatedTask.estimated_minutes,
-            due_datetime: updatedTask.due_datetime,
-            category: updatedTask.category || null,
-          }),
-        });
-
-        // Update local state
-        setTasks((prev) =>
-          prev.map((t) => (t.task_id === updatedTask.task_id ? updatedTask : t)),
+        const res = await apiJson<Task | { tasks: Task[] }>(
+          `/api/me/tasks/${updatedTask.task_id}?scope=${encodeURIComponent(updatedTask.edit_scope || 'single')}`,
+          {
+            method: 'PUT',
+            token,
+            body: JSON.stringify({
+              title: updatedTask.title,
+              notes: updatedTask.notes,
+              priority: updatedTask.priority,
+              status: updatedTask.status,
+              planned_datetime: updatedTask.planned_datetime,
+              estimated_minutes: updatedTask.estimated_minutes,
+              due_datetime: updatedTask.due_datetime,
+              category: updatedTask.category || null,
+            }),
+          },
         );
+
+        if ('tasks' in res && Array.isArray(res.tasks) && res.tasks.length) {
+          const byId = new Map(res.tasks.map((t) => [t.task_id, t]));
+          setTasks((prev) => prev.map((t) => (byId.has(t.task_id!) ? (byId.get(t.task_id!) as Task) : t)));
+        } else {
+          setTasks((prev) => prev.map((t) => (t.task_id === updatedTask.task_id ? (res as Task) : t)));
+        }
       }
     } catch (err) {
       console.error('Error saving task:', err);
@@ -132,59 +149,67 @@ const Tasks = () => {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
 
-  type ViewMode = 'all' | 'due_today' | 'by_due_date' | 'by_priority';
-  const [viewMode, setViewMode] = useState<ViewMode>('by_due_date');
+  type ListScope = 'all' | 'due_today';
+  type OrganizeBy = 'due_date' | 'priority' | 'category';
 
-  const visibleTasks = tasks.filter((t) => t.status !== 'completed');
+  const [listScope, setListScope] = useState<ListScope>('all');
+  const [organizeBy, setOrganizeBy] = useState<OrganizeBy>('due_date');
 
-  // Filter and sort based on view mode
-  const displayedTasks = (() => {
-    let filtered = visibleTasks;
+  const organizeLabels: Record<OrganizeBy, string> = {
+    due_date: 'Due date',
+    priority: 'Priority',
+    category: 'Category',
+  };
 
-    if (viewMode === 'all') {
-      return [...filtered].sort((a, b) => {
-        const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return aCreated - bCreated; // oldest first (order of creation)
-      });
-    }
+  const cycleOrganize = () => {
+    setOrganizeBy((prev) => {
+      if (prev === 'due_date') return 'priority';
+      if (prev === 'priority') return 'category';
+      return 'due_date';
+    });
+  };
 
-    if (viewMode === 'due_today') {
-      filtered = visibleTasks
-        .filter((t) => {
-          if (!t.due_datetime) return false;
-          const due = new Date(t.due_datetime).getTime();
-          return due >= startOfToday && due <= endOfToday;
-        })
-        .sort((a, b) => {
-          const aDue = new Date(a.due_datetime!).getTime();
-          const bDue = new Date(b.due_datetime!).getTime();
-          return aDue - bDue;
-        });
-      return filtered;
-    }
+  const displayedTasks = useMemo(() => {
+    const visibleTasks = tasks.filter((t) => t.status !== 'completed');
+    let filtered =
+      listScope === 'due_today'
+        ? visibleTasks.filter((t) => {
+            if (!t.due_datetime) return false;
+            const due = new Date(t.due_datetime).getTime();
+            return due >= startOfToday && due <= endOfToday;
+          })
+        : [...visibleTasks];
 
-    if (viewMode === 'by_due_date') {
-      return [...filtered].sort((a, b) => {
-        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-        return aDue - bDue; // earliest first, no due date at bottom
-      });
-    }
+    const byDueDate = (a: Task, b: Task) => {
+      const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+      const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+      return aDue - bDue;
+    };
 
-    if (viewMode === 'by_priority') {
-      return [...filtered].sort((a, b) => {
-        const prio = (a.priority || 3) - (b.priority || 3);
-        if (prio !== 0) return prio; // 1 first, then 2, then 3
-        // secondary: by due date
-        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-        return aDue - bDue;
-      });
+    const byPriorityThenDue = (a: Task, b: Task) => {
+      const prio = (a.priority || 3) - (b.priority || 3);
+      if (prio !== 0) return prio;
+      return byDueDate(a, b);
+    };
+
+    const byCategoryThenDue = (a: Task, b: Task) => {
+      const ac = (a.category || '').trim() || '\uFFFF';
+      const bc = (b.category || '').trim() || '\uFFFF';
+      const cmp = ac.localeCompare(bc, undefined, { sensitivity: 'base' });
+      if (cmp !== 0) return cmp;
+      return byDueDate(a, b);
+    };
+
+    if (organizeBy === 'due_date') {
+      filtered.sort(byDueDate);
+    } else if (organizeBy === 'priority') {
+      filtered.sort(byPriorityThenDue);
+    } else {
+      filtered.sort(byCategoryThenDue);
     }
 
     return filtered;
-  })();
+  }, [tasks, listScope, organizeBy, startOfToday, endOfToday]);
 
   // Time budget: available = (now → bedtime today) minus planned events
   const { availableMinutes, taskMinutesToday } = useMemo(() => {
@@ -264,60 +289,74 @@ const Tasks = () => {
           </div>
         )}
 
-        {/* Filter buttons */}
-        <div className="flex flex-wrap gap-2">
+        {/* Scope buttons + sort toggle group */}
+        <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => setViewMode('all')}
+            type="button"
+            onClick={() => setListScope('all')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'all'
+              listScope === 'all'
                 ? 'bg-accent text-accent-foreground'
                 : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
             }`}
           >
-            All Tasks
+            All tasks
           </button>
           <button
-            onClick={() => setViewMode('due_today')}
+            type="button"
+            onClick={() => setListScope('due_today')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'due_today'
+              listScope === 'due_today'
                 ? 'bg-accent text-accent-foreground'
                 : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
             }`}
           >
-            Due Today
+            Due today
           </button>
-          <button
-            onClick={() => setViewMode('by_due_date')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'by_due_date'
-                ? 'bg-accent text-accent-foreground'
-                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            By Due Date
-          </button>
-          <button
-            onClick={() => setViewMode('by_priority')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'by_priority'
-                ? 'bg-accent text-accent-foreground'
-                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            By Priority
-          </button>
+
+          {/* Sort segmented toggle (only these three) */}
+          <div className="rounded-xl border border-border bg-muted/40 p-1 flex gap-1">
+            <button
+              type="button"
+              onClick={() => setOrganizeBy('due_date')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                organizeBy === 'due_date'
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              }`}
+            >
+              Due date
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrganizeBy('priority')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                organizeBy === 'priority'
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              }`}
+            >
+              Priority
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrganizeBy('category')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                organizeBy === 'category'
+                  ? 'bg-accent text-accent-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+              }`}
+            >
+              Category
+            </button>
+          </div>
         </div>
 
         {/* All tasks in one list */}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <h2 className="text-sm font-semibold text-foreground mb-2">
-            {viewMode === 'all'
-              ? 'All Tasks'
-              : viewMode === 'due_today'
-                ? 'Tasks Due Today'
-                : viewMode === 'by_due_date'
-                  ? 'Tasks by Due Date'
-                  : 'Tasks by Priority'}
+            {listScope === 'all' ? 'All tasks' : 'Due today'}
+            <span className="text-muted-foreground font-normal"> · {organizeLabels[organizeBy]}</span>
           </h2>
           {displayedTasks.length > 0 ? (
             <div className="space-y-2">
@@ -337,7 +376,7 @@ const Tasks = () => {
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">
-              {viewMode === 'due_today' ? 'No tasks due today.' : 'No tasks.'}
+              {listScope === 'due_today' ? 'No tasks due today.' : 'No tasks.'}
             </p>
           )}
         </div>
@@ -355,6 +394,9 @@ const Tasks = () => {
               planned_datetime: undefined,
               due_datetime: undefined,
               category: undefined,
+              repeat: 'none',
+              repeat_count: 5,
+              repeat_until: undefined,
             });
             setMode('create');
           }}
@@ -370,6 +412,18 @@ const Tasks = () => {
           mode={mode}
           onClose={() => setEditingTask(null)}
           onSave={handleSaveTask}
+          onDelete={async (task) => {
+            if (!token || !task.task_id) throw new Error('Task not found');
+            await apiJson(`/api/me/tasks/${task.task_id}?scope=${encodeURIComponent(task.edit_scope || 'single')}`, {
+              method: 'DELETE',
+              token,
+            });
+            if ((task.edit_scope || 'single') === 'series' && task.recurrence_series_id) {
+              setTasks((prev) => prev.filter((t) => t.recurrence_series_id !== task.recurrence_series_id));
+            } else {
+              setTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
+            }
+          }}
         />
       )}
     </div>
