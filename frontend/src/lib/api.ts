@@ -16,6 +16,7 @@ export async function apiJson<T>(
   opts: RequestInit & { token?: string } = {}
 ): Promise<T> {
   const url = `${API_BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+  const { token: _omit, ...init } = opts;
   const headers = new Headers(opts.headers || {});
   headers.set("Accept", "application/json");
   if (!headers.has("Content-Type") && opts.body) {
@@ -33,7 +34,7 @@ export async function apiJson<T>(
   }
   if (opts.token) headers.set("Authorization", `Bearer ${opts.token}`);
 
-  const res = await fetch(url, { ...opts, headers });
+  const res = await fetch(url, { ...init, headers });
   const text = await res.text();
   const data = text ? safeJsonParse(text) : null;
 

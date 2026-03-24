@@ -7,6 +7,7 @@ import { useApp } from '@/contexts/AppContext';
 import { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
+import { isTaskPastDue } from '@/lib/taskOverdue';
 import { format } from 'date-fns';
 
 interface Task {
@@ -132,7 +133,7 @@ const Tasks = () => {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
 
-  type ViewMode = 'all' | 'due_today' | 'by_due_date' | 'by_priority';
+  type ViewMode = 'all' | 'due_today' | 'passed' | 'by_due_date' | 'by_priority';
   const [viewMode, setViewMode] = useState<ViewMode>('by_due_date');
 
   const visibleTasks = tasks.filter((t) => t.status !== 'completed');
@@ -162,6 +163,16 @@ const Tasks = () => {
           return aDue - bDue;
         });
       return filtered;
+    }
+
+    if (viewMode === 'passed') {
+      return visibleTasks
+        .filter((t) => isTaskPastDue(t.status, t.due_datetime))
+        .sort((a, b) => {
+          const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : 0;
+          const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : 0;
+          return aDue - bDue; // oldest overdue first
+        });
     }
 
     if (viewMode === 'by_due_date') {
@@ -287,6 +298,16 @@ const Tasks = () => {
             Due Today
           </button>
           <button
+            onClick={() => setViewMode('passed')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              viewMode === 'passed'
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            Passed
+          </button>
+          <button
             onClick={() => setViewMode('by_due_date')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               viewMode === 'by_due_date'
@@ -315,7 +336,9 @@ const Tasks = () => {
               ? 'All Tasks'
               : viewMode === 'due_today'
                 ? 'Tasks Due Today'
-                : viewMode === 'by_due_date'
+                : viewMode === 'passed'
+                  ? 'Passed — overdue and not completed'
+                  : viewMode === 'by_due_date'
                   ? 'Tasks by Due Date'
                   : 'Tasks by Priority'}
           </h2>
@@ -327,17 +350,23 @@ const Tasks = () => {
                   title={task.title}
                   subtitle={task.notes}
                   category={task.category}
+                  priority={task.priority}
                   duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
                   plannedDate={formatDateTime(task.planned_datetime)}
                   dueDate={formatDateTime(task.due_datetime)}
                   completed={task.status === 'completed'}
+                  pastDue={isTaskPastDue(task.status, task.due_datetime)}
                   onEdit={() => { setEditingTask(task); setMode('edit'); }}
                 />
               ))}
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">
-              {viewMode === 'due_today' ? 'No tasks due today.' : 'No tasks.'}
+              {viewMode === 'due_today'
+                ? 'No tasks due today.'
+                : viewMode === 'passed'
+                  ? 'No overdue tasks — you’re all caught up.'
+                  : 'No tasks.'}
             </p>
           )}
         </div>
