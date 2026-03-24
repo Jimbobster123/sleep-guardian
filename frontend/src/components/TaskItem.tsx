@@ -2,6 +2,7 @@ import { Pencil, Star } from 'lucide-react';
 import { priorityStarCount } from '@/lib/taskPriority';
 
 interface TaskItemProps {
+  taskId?: string;
   title: string;
   subtitle?: string; // notes
   category?: string | null;
@@ -16,9 +17,12 @@ interface TaskItemProps {
   taskId?: string;
   /** 1 = highest, 3 = lowest */
   priority?: number;
+  onToggleComplete?: (checked: boolean) => void | Promise<void>;
+  completing?: boolean;
 }
 
 const TaskItem = ({
+  taskId,
   title,
   subtitle,
   category,
@@ -31,6 +35,8 @@ const TaskItem = ({
   onEdit,
   taskId,
   priority,
+  onToggleComplete,
+  completing,
 }: TaskItemProps) => {
   const hasMeta = category || subtitle || plannedDate || dueDate;
   const stars = priorityStarCount(priority);
@@ -41,8 +47,10 @@ const TaskItem = ({
       <input
         type="checkbox"
         checked={completed}
-        readOnly
-        className="w-4 h-4 rounded border-2 border-muted-foreground/40 accent-accent flex-shrink-0"
+        disabled={completing}
+        onChange={(e) => onToggleComplete?.(e.target.checked)}
+        aria-label={taskId ? `Mark task ${title} as completed` : `Mark ${title} as completed`}
+        className="w-4 h-4 rounded border-2 border-muted-foreground/40 accent-accent flex-shrink-0 cursor-pointer disabled:cursor-not-allowed"
       />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
