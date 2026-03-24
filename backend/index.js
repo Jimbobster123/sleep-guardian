@@ -23,6 +23,18 @@ if (!frontendOrigins.includes('http://localhost:8080')) frontendOrigins.push('ht
 if (!frontendOrigins.includes('http://127.0.0.1:8080')) frontendOrigins.push('http://127.0.0.1:8080');
 if (!frontendOrigins.includes('http://localhost:5173')) frontendOrigins.push('http://localhost:5173');
 if (!frontendOrigins.includes('http://127.0.0.1:5173')) frontendOrigins.push('http://127.0.0.1:5173');
+if (!frontendOrigins.includes('http://[::1]:8080')) frontendOrigins.push('http://[::1]:8080');
+if (!frontendOrigins.includes('http://[::1]:5173')) frontendOrigins.push('http://[::1]:5173');
+
+function isLocalDevBrowserOrigin(origin) {
+  try {
+    const u = new URL(origin);
+    const h = u.hostname;
+    return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+  } catch {
+    return false;
+  }
+}
 
 app.use(
   cors({
@@ -30,6 +42,8 @@ app.use(
       // Allow non-browser tools (curl, server-to-server) that send no Origin header.
       if (!origin) return callback(null, true);
       if (frontendOrigins.includes(origin)) return callback(null, true);
+      // Any port on loopback (e.g. Vite on 8080 vs 5173, or IPv6 ::1) so dev isn't fragile.
+      if (isLocalDevBrowserOrigin(origin)) return callback(null, true);
       return callback(new Error(`CORS blocked origin: ${origin}`));
     },
     allowedHeaders: ['Content-Type', 'Authorization'],

@@ -23,6 +23,8 @@ function coalesceEstimatedMinutes(v) {
   if (v === undefined || v === null) return undefined;
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
 function isMissingColumnError(err, columnName) {
   return err instanceof Error && err.message?.includes(columnName) && err.message?.includes('does not exist');
 }
@@ -428,6 +430,8 @@ export async function deleteTasksBySeriesId(userId, recurrenceSeriesId) {
     [userId, recurrenceSeriesId]
   );
   return result.rows;
+}
+
 export async function updateTaskStatus(taskId, userId, status) {
   const normalizedStatus = typeof status === 'string' && status.trim()
     ? status.trim().toLowerCase()
