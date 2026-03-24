@@ -16,6 +16,7 @@ export async function apiJson<T>(
   opts: RequestInit & { token?: string } = {}
 ): Promise<T> {
   const url = `${API_BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+  const { token: _omit, ...init } = opts;
   const headers = new Headers(opts.headers || {});
   headers.set("Accept", "application/json");
   if (!headers.has("Content-Type") && opts.body) {
@@ -33,7 +34,16 @@ export async function apiJson<T>(
   }
   if (opts.token) headers.set("Authorization", `Bearer ${opts.token}`);
 
-  const res = await fetch(url, { ...opts, headers });
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, headers });
+  } catch (e) {
+    const hint =
+      e instanceof TypeError
+        ? `Cannot reach the API (${API_BASE_URL}). Start the backend (e.g. npm run dev in /backend, port 5001) or set VITE_API_BASE_URL if it runs elsewhere.`
+        : String(e);
+    throw new ApiError(hint, 0, e);
+  }
   const text = await res.text();
   const data = text ? safeJsonParse(text) : null;
 

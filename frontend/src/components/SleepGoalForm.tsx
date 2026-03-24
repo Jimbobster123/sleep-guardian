@@ -66,12 +66,14 @@ export default function SleepGoalForm({
   submitError,
   formId,
   hideSubmitButton,
+  centerSubmit,
 }: {
   initial?: Partial<SleepGoalDraft>;
   onSubmit: (draft: SleepGoalDraft) => Promise<void> | void;
   submitLabel?: string;
   formId?: string;
   hideSubmitButton?: boolean;
+  centerSubmit?: boolean;
   busy?: boolean;
   submitError?: string | null;
 }) {
@@ -387,7 +389,7 @@ export default function SleepGoalForm({
       {submitError && <div className="text-sm text-destructive">{submitError}</div>}
 
       {!hideSubmitButton && (
-        <div className="flex justify-end">
+        <div className={`flex ${centerSubmit ? "justify-center" : "justify-end"}`}>
           <Button type="submit" disabled={busy || hasValidationErrors}>
             {submitLabel}
           </Button>

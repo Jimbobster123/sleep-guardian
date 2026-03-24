@@ -17,18 +17,38 @@ interface Task {
   estimated_minutes: number;
   due_datetime?: string;
   category?: string | null;
+  repeat?: 'none' | 'daily' | 'weekdays' | 'weekly';
+  repeat_count?: number;
+  repeat_until?: string;
+  recurrence_series_id?: string | null;
+  edit_scope?: 'single' | 'series';
 }
 
 const TASK_CATEGORIES = ['Work', 'Personal', 'Health', 'Errands', 'Study', 'Other'] as const;
+
+function localDateString(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function parseDateLike(value: string) {
+  if (!value) return null;
+  const normalized = value.includes(' ') ? value.replace(' ', 'T') : value;
+  const d = new Date(normalized);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 interface TaskEditModalProps {
   task: Task;
   mode?: 'create' | 'edit';
   onClose: () => void;
   onSave: (updatedTask: Task) => Promise<void>;
+  onDelete?: (task: Task) => Promise<void>;
 }
 
-const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalProps) => {
+const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskEditModalProps) => {
   const { user } = useAuth();
   const zone = effectiveTimeZone(user?.timezone);
   const [formData, setFormData] = useState<Task>(task);
@@ -36,6 +56,7 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalPr
     Boolean(task.planned_datetime || (task.estimated_minutes && task.estimated_minutes > 0))
   );
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleChange = (field: keyof Task, value: unknown) => {
@@ -68,20 +89,36 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalPr
       onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to save task';
-      let detailStr: string | null = null;
-      if (err instanceof ApiError && err.details) {
+      let supplementary: string | null = null;
+      if (err instanceof ApiError && err.details != null) {
         const d = err.details;
-        if (typeof d === 'object' && d !== null && 'details' in d && typeof (d as { details?: unknown }).details === 'string') {
-          detailStr = (d as { details: string }).details;
-        } else if (typeof d === 'string') {
-          detailStr = d;
-        } else {
-          detailStr = JSON.stringify(d);
+        if (typeof d === 'object' && d !== null) {
+          const nested = (d as { details?: unknown }).details;
+          if (typeof nested === 'string' && nested.trim()) {
+            supplementary = nested.trim();
+          }
+        } else if (typeof d === 'string' && d.trim() && d !== msg) {
+          supplementary = d.trim();
         }
       }
-      setError(detailStr ? `${msg}: ${detailStr}` : msg);
+      setError(supplementary ? `${msg}: ${supplementary}` : msg);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!onDelete) return;
+    try {
+      setDeleting(true);
+      setError(null);
+      await onDelete(formData);
+      onClose();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete task';
+      setError(msg);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -274,6 +311,48 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalPr
                   />
                 </div>
 
+                {mode === 'create' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-sm font-medium text-foreground mb-1 block">Repeat</label>
+                      <select
+                        value={formData.repeat || 'none'}
+                        onChange={(e) => handleChange('repeat', e.target.value as Task['repeat'])}
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                      >
+                        <option value="none">Does not repeat</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekdays">Weekdays</option>
+                        <option value="weekly">Weekly</option>
+                      </select>
+                    </div>
+                    {(formData.repeat || 'none') !== 'none' && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-sm font-medium text-foreground mb-1 block">Occurrences</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="365"
+                            value={formData.repeat_count || 5}
+                            onChange={(e) => handleChange('repeat_count', parseInt(e.target.value, 10) || 1)}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium text-foreground mb-1 block">Repeat until</label>
+                          <input
+                            type="date"
+                            value={formData.repeat_until || ''}
+                            onChange={(e) => handleChange('repeat_until', e.target.value || undefined)}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Status — edit mode only */}
                 {mode === 'edit' && (
                   <div>
@@ -289,6 +368,20 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalPr
                     </select>
                   </div>
                 )}
+
+                {mode === 'edit' && formData.recurrence_series_id ? (
+                  <div>
+                    <label className="text-sm font-medium text-foreground mb-1 block">Apply changes to</label>
+                    <select
+                      value={formData.edit_scope || 'single'}
+                      onChange={(e) => handleChange('edit_scope', e.target.value as Task['edit_scope'])}
+                      className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                    >
+                      <option value="single">Only this task</option>
+                      <option value="series">All tasks in this series</option>
+                    </select>
+                  </div>
+                ) : null}
               </CollapsibleContent>
             </Collapsible>
 
@@ -302,6 +395,15 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalPr
 
         {/* Actions */}
         <div className="flex-shrink-0 flex gap-3 p-4 pt-2 border-t border-border/50">
+          {mode === 'edit' && onDelete ? (
+            <button
+              onClick={handleDelete}
+              disabled={deleting || saving}
+              className="px-4 py-2 rounded-lg border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors font-medium disabled:opacity-50"
+            >
+              {deleting ? 'DELETING…' : 'DELETE'}
+            </button>
+          ) : null}
           <button
             onClick={onClose}
             className="flex-1 px-4 py-2 rounded-lg border border-border text-foreground hover:bg-muted transition-colors font-medium"
@@ -310,7 +412,7 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave }: TaskEditModalPr
           </button>
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || deleting}
             className="flex-1 px-4 py-2 rounded-lg bg-accent text-white hover:opacity-90 transition-opacity font-semibold tracking-wide uppercase disabled:opacity-50"
           >
             {saving ? (mode === 'create' ? 'ADDING…' : 'SAVING…') : mode === 'create' ? 'ADD TASK' : 'SAVE'}

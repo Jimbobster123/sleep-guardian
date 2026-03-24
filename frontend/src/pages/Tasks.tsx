@@ -7,7 +7,9 @@ import { useApp } from '@/contexts/AppContext';
 import { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
+import { isTaskPastDue } from '@/lib/taskOverdue';
 import { format } from 'date-fns';
+import { toast } from '@/components/ui/sonner';
 
 interface Task {
   task_id?: string;
@@ -20,6 +22,11 @@ interface Task {
   due_datetime?: string;
   created_at?: string;
   category?: string | null;
+  repeat?: 'none' | 'daily' | 'weekdays' | 'weekly';
+  repeat_count?: number;
+  repeat_until?: string;
+  recurrence_series_id?: string | null;
+  edit_scope?: 'single' | 'series';
 }
 
 type SleepGoalResponse = {
@@ -46,6 +53,7 @@ const Tasks = () => {
   const [error, setError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [mode, setMode] = useState<'create' | 'edit'>('edit');
+  const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -85,7 +93,7 @@ const Tasks = () => {
 
       if (!updatedTask.task_id) {
         // Create
-        const created = await apiJson<Task>('/api/me/tasks', {
+        const created = await apiJson<Task | { tasks: Task[] }>('/api/me/tasks', {
           method: 'POST',
           token,
           body: JSON.stringify({
@@ -97,30 +105,42 @@ const Tasks = () => {
             estimated_minutes: updatedTask.estimated_minutes,
             due_datetime: updatedTask.due_datetime,
             category: updatedTask.category || null,
+            repeat: updatedTask.repeat || 'none',
+            repeat_count: updatedTask.repeat_count || 1,
+            repeat_until: updatedTask.repeat_until || null,
           }),
         });
-        setTasks((prev) => [...prev, created]);
+        if ('tasks' in created && Array.isArray(created.tasks)) {
+          setTasks((prev) => [...prev, ...created.tasks]);
+        } else {
+          setTasks((prev) => [...prev, created]);
+        }
       } else {
         // Update
-        await apiJson(`/api/me/tasks/${updatedTask.task_id}`, {
-          method: 'PUT',
-          token,
-          body: JSON.stringify({
-            title: updatedTask.title,
-            notes: updatedTask.notes,
-            priority: updatedTask.priority,
-            status: updatedTask.status,
-            planned_datetime: updatedTask.planned_datetime,
-            estimated_minutes: updatedTask.estimated_minutes,
-            due_datetime: updatedTask.due_datetime,
-            category: updatedTask.category || null,
-          }),
-        });
-
-        // Update local state
-        setTasks((prev) =>
-          prev.map((t) => (t.task_id === updatedTask.task_id ? updatedTask : t)),
+        const res = await apiJson<Task | { tasks: Task[] }>(
+          `/api/me/tasks/${updatedTask.task_id}?scope=${encodeURIComponent(updatedTask.edit_scope || 'single')}`,
+          {
+            method: 'PUT',
+            token,
+            body: JSON.stringify({
+              title: updatedTask.title,
+              notes: updatedTask.notes,
+              priority: updatedTask.priority,
+              status: updatedTask.status,
+              planned_datetime: updatedTask.planned_datetime,
+              estimated_minutes: updatedTask.estimated_minutes,
+              due_datetime: updatedTask.due_datetime,
+              category: updatedTask.category || null,
+            }),
+          },
         );
+
+        if ('tasks' in res && Array.isArray(res.tasks) && res.tasks.length) {
+          const byId = new Map(res.tasks.map((t) => [t.task_id, t]));
+          setTasks((prev) => prev.map((t) => (byId.has(t.task_id!) ? (byId.get(t.task_id!) as Task) : t)));
+        } else {
+          setTasks((prev) => prev.map((t) => (t.task_id === updatedTask.task_id ? (res as Task) : t)));
+        }
       }
     } catch (err) {
       console.error('Error saving task:', err);
@@ -128,18 +148,55 @@ const Tasks = () => {
     }
   };
 
+  const handleTaskCompletion = async (taskId: string | undefined, checked: boolean) => {
+    if (!token || !taskId) return;
+
+    const nextStatus = checked ? 'completed' : 'pending';
+    const previousTasks = tasks;
+
+    setUpdatingTaskId(taskId);
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.task_id === taskId ? { ...task, status: nextStatus } : task,
+      ),
+    );
+
+    try {
+      const updated = await apiJson<Task>(`/api/me/tasks/${taskId}/status`, {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify({ status: nextStatus }),
+      });
+
+      setTasks((prev) =>
+        prev.map((task) => (task.task_id === taskId ? updated : task)),
+      );
+
+      if (checked) {
+        toast.success('Task marked completed');
+      }
+    } catch (err) {
+      setTasks(previousTasks);
+      console.error('Error updating task status:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to update task status');
+    } finally {
+      setUpdatingTaskId(null);
+    }
+  };
+
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
 
-  type ViewMode = 'all' | 'due_today' | 'by_due_date' | 'by_priority';
+  type ViewMode = 'all' | 'due_today' | 'passed' | 'by_due_date' | 'by_priority' | 'completed';
   const [viewMode, setViewMode] = useState<ViewMode>('by_due_date');
 
-  const visibleTasks = tasks.filter((t) => t.status !== 'completed');
+  const activeTasks = tasks.filter((t) => t.status !== 'completed');
+  const completedTasks = tasks.filter((t) => t.status === 'completed');
 
   // Filter and sort based on view mode
   const displayedTasks = (() => {
-    let filtered = visibleTasks;
+    let filtered = activeTasks;
 
     if (viewMode === 'all') {
       return [...filtered].sort((a, b) => {
@@ -150,7 +207,7 @@ const Tasks = () => {
     }
 
     if (viewMode === 'due_today') {
-      filtered = visibleTasks
+      filtered = activeTasks
         .filter((t) => {
           if (!t.due_datetime) return false;
           const due = new Date(t.due_datetime).getTime();
@@ -162,6 +219,16 @@ const Tasks = () => {
           return aDue - bDue;
         });
       return filtered;
+    }
+
+    if (viewMode === 'passed') {
+      return activeTasks
+        .filter((t) => isTaskPastDue(t.status, t.due_datetime))
+        .sort((a, b) => {
+          const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : 0;
+          const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : 0;
+          return aDue - bDue; // oldest overdue first
+        });
     }
 
     if (viewMode === 'by_due_date') {
@@ -176,10 +243,21 @@ const Tasks = () => {
       return [...filtered].sort((a, b) => {
         const prio = (a.priority || 3) - (b.priority || 3);
         if (prio !== 0) return prio; // 1 first, then 2, then 3
-        // secondary: by due date
         const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
         const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
         return aDue - bDue;
+      });
+    }
+
+    if (viewMode === 'completed') {
+      return [...completedTasks].sort((a, b) => {
+        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.NEGATIVE_INFINITY;
+        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.NEGATIVE_INFINITY;
+        if (aDue !== bDue) return bDue - aDue;
+
+        const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return bCreated - aCreated;
       });
     }
 
@@ -264,9 +342,10 @@ const Tasks = () => {
           </div>
         )}
 
-        {/* Filter buttons */}
-        <div className="flex flex-wrap gap-2">
+        {/* Scope buttons + sort toggle group */}
+        <div className="flex flex-wrap items-center gap-2">
           <button
+            type="button"
             onClick={() => setViewMode('all')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               viewMode === 'all'
@@ -277,6 +356,7 @@ const Tasks = () => {
             All Tasks
           </button>
           <button
+            type="button"
             onClick={() => setViewMode('due_today')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               viewMode === 'due_today'
@@ -285,6 +365,17 @@ const Tasks = () => {
             }`}
           >
             Due Today
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('passed')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              viewMode === 'passed'
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            Passed
           </button>
           <button
             onClick={() => setViewMode('by_due_date')}
@@ -306,6 +397,16 @@ const Tasks = () => {
           >
             By Priority
           </button>
+          <button
+            onClick={() => setViewMode('completed')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              viewMode === 'completed'
+                ? 'bg-accent text-accent-foreground'
+                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+          >
+            Completed
+          </button>
         </div>
 
         {/* All tasks in one list */}
@@ -315,29 +416,44 @@ const Tasks = () => {
               ? 'All Tasks'
               : viewMode === 'due_today'
                 ? 'Tasks Due Today'
-                : viewMode === 'by_due_date'
+                : viewMode === 'passed'
+                  ? 'Passed — overdue and not completed'
+                  : viewMode === 'by_due_date'
                   ? 'Tasks by Due Date'
-                  : 'Tasks by Priority'}
+                  : viewMode === 'by_priority'
+                    ? 'Tasks by Priority'
+                    : 'Completed Tasks'}
           </h2>
           {displayedTasks.length > 0 ? (
             <div className="space-y-2">
               {displayedTasks.map((task) => (
                 <TaskItem
                   key={task.task_id}
+                  taskId={task.task_id}
                   title={task.title}
                   subtitle={task.notes}
                   category={task.category}
+                  priority={task.priority}
                   duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
                   plannedDate={formatDateTime(task.planned_datetime)}
                   dueDate={formatDateTime(task.due_datetime)}
                   completed={task.status === 'completed'}
+                  pastDue={isTaskPastDue(task.status, task.due_datetime)}
+                  completing={updatingTaskId === task.task_id}
+                  onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
                   onEdit={() => { setEditingTask(task); setMode('edit'); }}
                 />
               ))}
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">
-              {viewMode === 'due_today' ? 'No tasks due today.' : 'No tasks.'}
+              {viewMode === 'due_today'
+                ? 'No tasks due today.'
+                : viewMode === 'passed'
+                  ? 'No overdue tasks — you’re all caught up.'
+                  : viewMode === 'completed'
+                    ? 'No completed tasks yet.'
+                    : 'No tasks.'}
             </p>
           )}
         </div>
@@ -355,6 +471,9 @@ const Tasks = () => {
               planned_datetime: undefined,
               due_datetime: undefined,
               category: undefined,
+              repeat: 'none',
+              repeat_count: 5,
+              repeat_until: undefined,
             });
             setMode('create');
           }}
@@ -370,6 +489,18 @@ const Tasks = () => {
           mode={mode}
           onClose={() => setEditingTask(null)}
           onSave={handleSaveTask}
+          onDelete={async (task) => {
+            if (!token || !task.task_id) throw new Error('Task not found');
+            await apiJson(`/api/me/tasks/${task.task_id}?scope=${encodeURIComponent(task.edit_scope || 'single')}`, {
+              method: 'DELETE',
+              token,
+            });
+            if ((task.edit_scope || 'single') === 'series' && task.recurrence_series_id) {
+              setTasks((prev) => prev.filter((t) => t.recurrence_series_id !== task.recurrence_series_id));
+            } else {
+              setTasks((prev) => prev.filter((t) => t.task_id !== task.task_id));
+            }
+          }}
         />
       )}
     </div>

@@ -51,7 +51,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       return;
     }
-    const res = await apiJson<{ user: User }>("/api/me", { token });
+    const signal =
+      typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+        ? AbortSignal.timeout(12_000)
+        : undefined;
+    const res = await apiJson<{ user: User }>("/api/me", { token, signal });
     setUser(res.user);
   }, [token]);
 

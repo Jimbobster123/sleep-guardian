@@ -1,9 +1,23 @@
 import PageHeader from '@/components/PageHeader';
-import { Sun, Moon, ChevronLeft, ChevronRight, Wand2, Plus, Calendar as CalendarIcon, CheckSquare, Clock3, Trash2 } from 'lucide-react';
+import {
+  Sun,
+  Moon,
+  ChevronLeft,
+  ChevronRight,
+  Wand2,
+  Plus,
+  Calendar as CalendarIcon,
+  CheckSquare,
+  Clock3,
+  Trash2,
+  Star,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { format, addDays, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, eachDayOfInterval, isSameDay, isSameMonth, isToday } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
+import { isTaskPastDue } from '@/lib/taskOverdue';
+import { priorityStarCount } from '@/lib/taskPriority';
 import {
   combineDateAndTimeForApi,
   defaultEndOneHourAfterStart,
@@ -41,7 +55,47 @@ type DbEvent = {
   source: string | null;
   is_all_day?: boolean | null;
   task_due_datetime?: string | null;
+  recurrence_series_id?: string | null;
+  task_status?: string | null;
+  task_priority?: number | null;
 };
+
+function calendarTaskPastDue(e: DbEvent): boolean {
+  if (!(e.source === 'task_planned' || e.source === 'task_due') || !e.task_id) return false;
+  return isTaskPastDue(e.task_status ?? 'pending', e.task_due_datetime);
+}
+
+function LatePill({ compact }: { compact?: boolean }) {
+  return (
+    <span
+      className={
+        compact
+          ? 'inline-flex shrink-0 items-center rounded-full border border-orange-500/35 bg-orange-500/10 px-1 py-0 text-[9px] font-semibold text-orange-700 dark:text-orange-400'
+          : 'inline-flex shrink-0 items-center rounded-full border border-orange-500/35 bg-orange-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700 dark:text-orange-400'
+      }
+      aria-label="Late"
+    >
+      Late
+    </span>
+  );
+}
+
+function taskPriorityStars(event: DbEvent, compact: boolean) {
+  const n =
+    event.task_id && event.task_priority != null
+      ? priorityStarCount(Number(event.task_priority))
+      : 0;
+  if (n === 0) return null;
+  const size = compact ? 'w-2.5 h-2.5' : 'w-3.5 h-3.5';
+  const title = n === 2 ? 'High priority' : 'Medium priority';
+  return (
+    <span className="inline-flex items-center gap-0.5 text-warning flex-shrink-0" title={title}>
+      {Array.from({ length: n }).map((_, i) => (
+        <Star key={i} className={`${size} fill-warning text-warning`} aria-hidden />
+      ))}
+    </span>
+  );
+}
 
 type SleepGoalResponse = {
   goal: {
@@ -73,6 +127,8 @@ type Task = {
   estimated_minutes: number;
   planned_datetime?: string;
   due_datetime?: string;
+  recurrence_series_id?: string | null;
+  edit_scope?: 'single' | 'series';
 };
 
 function fmtPgLocal(ts: string | null | undefined, zone: string) {
@@ -109,7 +165,11 @@ const CalendarPage = () => {
   const [createEndTime, setCreateEndTime] = useState('10:00');
   const createStartTimeRef = useRef('09:00');
   const [createAllDay, setCreateAllDay] = useState(false);
+  const [createRepeat, setCreateRepeat] = useState<'none' | 'daily' | 'weekdays' | 'weekly'>('none');
+  const [createRepeatCount, setCreateRepeatCount] = useState(5);
+  const [createRepeatUntil, setCreateRepeatUntil] = useState('');
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingEvent, setEditingEvent] = useState<DbEvent | null>(null);
   const [editingEventTitle, setEditingEventTitle] = useState('');
@@ -119,6 +179,7 @@ const CalendarPage = () => {
   const [editingEndDate, setEditingEndDate] = useState('');
   const [editingEndTime, setEditingEndTime] = useState('');
   const [editingEventAllDay, setEditingEventAllDay] = useState(false);
+  const [editingEventScope, setEditingEventScope] = useState<'single' | 'series'>('single');
   const [savingEvent, setSavingEvent] = useState(false);
 
   const dateStr = useMemo(() => format(day, 'yyyy-MM-dd'), [day]);
@@ -413,6 +474,7 @@ const CalendarPage = () => {
         return;
       }
       setEditingEvent(event);
+      setEditingEventScope('single');
       setEditingEventTitle(event.title || '');
       setEditingEventDescription(event.description || '');
       const s = parseApiTimestamp(event.start_datetime, zone);
@@ -760,6 +822,45 @@ const CalendarPage = () => {
                       </p>
                     ) : null}
                   </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="space-y-1 sm:col-span-1">
+                      <label className="text-[10px] text-muted-foreground">Repeat</label>
+                      <select
+                        className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                        value={createRepeat}
+                        onChange={(e) => setCreateRepeat(e.target.value as typeof createRepeat)}
+                      >
+                        <option value="none">Does not repeat</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekdays">Weekdays</option>
+                        <option value="weekly">Weekly</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground">Occurrences</label>
+                      <Input
+                        type="number"
+                        min="1"
+                        max="365"
+                        value={createRepeatCount}
+                        onChange={(e) => setCreateRepeatCount(parseInt(e.target.value, 10) || 1)}
+                        disabled={createRepeat === 'none' || Boolean(createRepeatUntil)}
+                        className="h-9"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground">Repeat until</label>
+                      <Input
+                        type="date"
+                        value={createRepeatUntil}
+                        onChange={(e) => setCreateRepeatUntil(e.target.value)}
+                        disabled={createRepeat === 'none'}
+                        className="h-9"
+                      />
+                    </div>
+                  </div>
+                  {createError && <p className="text-xs text-destructive">{createError}</p>}
                 </div>
 
                 <DialogFooter>
@@ -770,6 +871,7 @@ const CalendarPage = () => {
                     onClick={async () => {
                       if (!token) return;
                       setCreating(true);
+                      setCreateError(null);
                       try {
                         const title = createTitle.trim();
                         const start = createAllDay
@@ -778,7 +880,7 @@ const CalendarPage = () => {
                         const end = createAllDay
                           ? `${createEventDate} 23:59:59`
                           : combineDateAndTimeForApi(createEndDate, createEndTime, zone);
-                        const created = await apiJson<DbEvent>('/api/me/calendar-events', {
+                        const created = await apiJson<DbEvent | { events: DbEvent[] }>('/api/me/calendar-events', {
                           method: 'POST',
                           token,
                           body: JSON.stringify({
@@ -789,9 +891,16 @@ const CalendarPage = () => {
                             is_all_day: createAllDay,
                             source: 'manual',
                             status: 'scheduled',
+                            repeat: createRepeat,
+                            repeat_count: createRepeatCount,
+                            repeat_until: createRepeatUntil || null,
                           }),
                         });
-                        setEvents((prev) => [...prev, created]);
+                        if ('events' in created && Array.isArray(created.events)) {
+                          setEvents((prev) => [...prev, ...created.events]);
+                        } else {
+                          setEvents((prev) => [...prev, created]);
+                        }
                         setCreateOpen(false);
                         setCreateTitle('');
                         setCreateDescription('');
@@ -799,6 +908,11 @@ const CalendarPage = () => {
                         setCreateEndDate(dateStr);
                         setCreateEndTime('10:00');
                         setCreateAllDay(false);
+                        setCreateRepeat('none');
+                        setCreateRepeatCount(5);
+                        setCreateRepeatUntil('');
+                      } catch (err) {
+                        setCreateError(err instanceof Error ? err.message : 'Failed to create event');
                       } finally {
                         setCreating(false);
                       }
@@ -948,6 +1062,8 @@ const CalendarPage = () => {
                             ) : event.source === 'task_due' ? (
                               <Clock3 className="w-3.5 h-3.5 text-accent flex-shrink-0" />
                             ) : null}
+                            {calendarTaskPastDue(event) && <LatePill />}
+                            {taskPriorityStars(event, false)}
                             <span
                               className={`text-[10px] px-1.5 py-0.5 rounded-sm border flex-shrink-0 ${
                                 event.source === 'task_planned'
@@ -1029,9 +1145,11 @@ const CalendarPage = () => {
                           key={event.event_id}
                           type="button"
                           onClick={() => void openEventEditor({ ...event, start, end })}
-                          className={`w-full text-left rounded px-1.5 py-0.5 text-[10px] truncate ${getEventStyle(event.source)}`}
+                          className={`w-full text-left rounded px-1.5 py-0.5 text-[10px] truncate flex items-center gap-0.5 ${getEventStyle(event.source)}`}
                         >
-                          {event.title || 'Event'}
+                          {calendarTaskPastDue(event) && <LatePill compact />}
+                          {taskPriorityStars(event, true)}
+                          <span className="truncate">{event.title || 'Event'}</span>
                         </button>
                       ))}
                     </div>
@@ -1086,9 +1204,11 @@ const CalendarPage = () => {
                           e.stopPropagation();
                           void openEventEditor({ ...event, start, end });
                         }}
-                        className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate block ${getEventStyle(event.source)}`}
+                        className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate flex items-center gap-0.5 ${getEventStyle(event.source)}`}
                       >
-                        {event.title || 'Event'}
+                        {calendarTaskPastDue(event) && <LatePill compact />}
+                        {taskPriorityStars(event, true)}
+                        <span className="truncate">{event.title || 'Event'}</span>
                       </button>
                     ))}
                     {more > 0 && (
@@ -1162,10 +1282,35 @@ const CalendarPage = () => {
           onClose={() => setEditingTask(null)}
           onSave={async (updated) => {
             if (!token) throw new Error('Not authenticated');
-            await apiJson(`/api/me/tasks/${updated.task_id}`, {
-              method: 'PUT',
+            await apiJson<Task | { tasks: Task[] }>(
+              `/api/me/tasks/${updated.task_id}?scope=${encodeURIComponent(updated.edit_scope || 'single')}`,
+              {
+                method: 'PUT',
+                token,
+                body: JSON.stringify({
+                  title: updated.title,
+                  notes: updated.notes,
+                  priority: updated.priority,
+                  status: updated.status,
+                  planned_datetime: updated.planned_datetime,
+                  estimated_minutes: updated.estimated_minutes,
+                  due_datetime: updated.due_datetime,
+                  category: updated.category || null,
+                }),
+              },
+            );
+            // Refresh events so calendar reflects changes (use full fetch range for recurring tasks)
+            const evRes = await apiJson<DbEvent[]>(
+              `/api/me/calendar-events?from=${encodeURIComponent(`${fetchRange.from} 00:00:00`)}&to=${encodeURIComponent(`${fetchRange.to} 00:00:00`)}`,
+              { token },
+            );
+            setEvents(evRes);
+          }}
+          onDelete={async (task) => {
+            if (!token || !task.task_id) throw new Error('Task not found');
+            await apiJson(`/api/me/tasks/${task.task_id}?scope=${encodeURIComponent(task.edit_scope || 'single')}`, {
+              method: 'DELETE',
               token,
-              body: JSON.stringify(updated),
             });
             await reloadCalendarEvents();
           }}
@@ -1289,6 +1434,19 @@ const CalendarPage = () => {
                 />
               </div>
             )}
+            {editingEvent?.recurrence_series_id ? (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-foreground">Apply changes to</label>
+                <select
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={editingEventScope}
+                  onChange={(e) => setEditingEventScope(e.target.value as 'single' | 'series')}
+                >
+                  <option value="single">Only this event</option>
+                  <option value="series">All events in this series</option>
+                </select>
+              </div>
+            ) : null}
           </div>
           <DialogFooter className="justify-between">
             <Button
@@ -1300,11 +1458,16 @@ const CalendarPage = () => {
                 if (!token || !editingEvent) return;
                 setSavingEvent(true);
                 try {
-                  await apiJson(`/api/me/calendar-events/${editingEvent.event_id}`, {
+                  const deleted = await apiJson<{ deleted_event_ids?: string[] }>(`/api/me/calendar-events/${editingEvent.event_id}?scope=${encodeURIComponent(editingEventScope)}`, {
                     method: 'DELETE',
                     token,
                   });
-                  setEvents((prev) => prev.filter((e) => e.event_id !== editingEvent.event_id));
+                  if (Array.isArray(deleted.deleted_event_ids) && deleted.deleted_event_ids.length) {
+                    const deletedSet = new Set(deleted.deleted_event_ids);
+                    setEvents((prev) => prev.filter((e) => !deletedSet.has(e.event_id)));
+                  } else {
+                    setEvents((prev) => prev.filter((e) => e.event_id !== editingEvent.event_id));
+                  }
                   setEditingEvent(null);
                 } finally {
                   setSavingEvent(false);
@@ -1340,17 +1503,20 @@ const CalendarPage = () => {
                     const endSql = editingEventAllDay
                       ? `${allDayDate} 23:59:59`
                       : combineDateAndTimeForApi(editingEndDate, editingEndTime, zone);
-                    await apiJson<DbEvent>(`/api/me/calendar-events/${editingEvent.event_id}`, {
-                      method: 'PUT',
-                      token,
-                      body: JSON.stringify({
-                        title: editingEventTitle || null,
-                        description: editingEventDescription || null,
-                        start_datetime: startSql || null,
-                        end_datetime: endSql || null,
-                        is_all_day: editingEventAllDay,
-                      }),
-                    });
+                    await apiJson<DbEvent | { events: DbEvent[] }>(
+                      `/api/me/calendar-events/${editingEvent.event_id}?scope=${encodeURIComponent(editingEventScope)}`,
+                      {
+                        method: 'PUT',
+                        token,
+                        body: JSON.stringify({
+                          title: editingEventTitle || null,
+                          description: editingEventDescription || null,
+                          start_datetime: startSql || null,
+                          end_datetime: endSql || null,
+                          is_all_day: editingEventAllDay,
+                        }),
+                      },
+                    );
                     await reloadCalendarEvents();
                     setEditingEvent(null);
                   } finally {

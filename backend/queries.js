@@ -7,6 +7,28 @@ function asNullIfEmpty(v) {
   return s.length === 0 ? null : v;
 }
 
+/** Local wall-clock timestamp for PostgreSQL TIMESTAMP columns (avoids JS Date → driver TZ drift). */
+function toPgTimestampLocal(date) {
+  if (!date || !(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+}
+
+function coalesceEstimatedMinutes(v) {
+  if (v === undefined || v === null) return undefined;
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
+function isMissingColumnError(err, columnName) {
+  return err instanceof Error && err.message?.includes(columnName) && err.message?.includes('does not exist');
+}
+
 // Get all tasks for a user
 export async function getUserTasks(userId) {
   try {
@@ -35,6 +57,16 @@ export async function getTaskById(taskId) {
   }
 }
 
+export async function getTasksBySeriesId(userId, recurrenceSeriesId) {
+  const result = await pool.query(
+    `SELECT * FROM "Task"
+     WHERE user_id = $1 AND recurrence_series_id = $2
+     ORDER BY planned_datetime ASC NULLS LAST, created_at ASC`,
+    [userId, recurrenceSeriesId]
+  );
+  return result.rows;
+}
+
 export async function createTask(userId, task) {
   const {
     title,
@@ -45,6 +77,7 @@ export async function createTask(userId, task) {
     estimated_minutes,
     due_datetime,
     category,
+    recurrence_series_id,
   } = task || {};
 
   if (typeof title !== 'string' || !title.trim()) {
@@ -52,13 +85,42 @@ export async function createTask(userId, task) {
   }
 
   const prio = Number.isFinite(priority) ? priority : 3;
-  const estMinutes = Number.isFinite(estimated_minutes) ? estimated_minutes : 0;
+  const estMinutes = coalesceEstimatedMinutes(estimated_minutes) ?? 0;
   const safeStatus = typeof status === 'string' && status.trim().length > 0 ? status : 'pending';
 
-  try {
+  const values = [
+    userId,
+    title.trim(),
+    asNullIfEmpty(notes),
+    prio,
+    safeStatus,
+    planned_datetime || null,
+    estMinutes,
+    due_datetime || null,
+    asNullIfEmpty(category),
+  ];
+
+  const runInsert = async ({ includePlannedDateTime = true, includeCategory = true } = {}) => {
+    const columns = ['user_id', 'title', 'notes', 'priority', 'status'];
+    const params = [values[0], values[1], values[2], values[3], values[4]];
+
+    if (includePlannedDateTime) {
+      columns.push('planned_datetime');
+      params.push(values[5]);
+    }
+
+    columns.push('estimated_minutes', 'due_datetime');
+    params.push(values[6], values[7]);
+
+    if (includeCategory) {
+      columns.push('category');
+      params.push(values[8]);
+    }
+
+    const placeholders = params.map((_, index) => `$${index + 1}`).join(', ');
     const result = await pool.query(
-      `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, category, recurrence_series_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [
         userId,
@@ -70,14 +132,20 @@ export async function createTask(userId, task) {
         estMinutes,
         due_datetime || null,
         asNullIfEmpty(category),
+        recurrence_series_id || null,
       ]
+      
     );
     return result.rows[0];
+  };
+
+  try {
+    return await runInsert();
   } catch (err) {
-    if (err instanceof Error && err.message?.includes('category') && err.message?.includes('does not exist')) {
+    if (err instanceof Error && err.message?.includes('recurrence_series_id') && err.message?.includes('does not exist')) {
       const result = await pool.query(
-        `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, category)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING *`,
         [
           userId,
@@ -88,10 +156,42 @@ export async function createTask(userId, task) {
           planned_datetime || null,
           estMinutes,
           due_datetime || null,
+          asNullIfEmpty(category),
         ]
       );
       return result.rows[0];
     }
+    if (err instanceof Error && err.message?.includes('category') && err.message?.includes('does not exist')) {
+      const result = await pool.query(
+        `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, recurrence_series_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING *`,
+        [
+          userId,
+          title.trim(),
+          asNullIfEmpty(notes),
+          prio,
+          safeStatus,
+          planned_datetime || null,
+          estMinutes,
+          due_datetime || null,
+          recurrence_series_id || null,
+        ]
+      );
+      return result.rows[0];
+    }
+
+    if (isMissingColumnError(err, 'planned_datetime')) {
+      try {
+        return await runInsert({ includePlannedDateTime: false });
+      } catch (retryErr) {
+        if (isMissingColumnError(retryErr, 'category')) {
+          return await runInsert({ includePlannedDateTime: false, includeCategory: false });
+        }
+        throw retryErr;
+      }
+    }
+
     throw err;
   }
 }
@@ -221,52 +321,138 @@ export async function getUserById(userId) {
 // Update task
 export async function updateTask(taskId, updates) {
   const { title, notes, priority, status, estimated_minutes, planned_datetime, due_datetime, category } = updates || {};
+  const est =
+    estimated_minutes === undefined || estimated_minutes === null
+      ? 0
+      : coalesceEstimatedMinutes(estimated_minutes) ?? 0;
   const params = [
     title,
     notes ?? null,
     priority ?? 3,
     status ?? 'pending',
-    Number.isFinite(estimated_minutes) ? estimated_minutes : 0,
+    est,
     planned_datetime || null,
     due_datetime || null,
     category ?? null,
     taskId,
   ];
+  const values = {
+    title,
+    notes: notes ?? null,
+    priority: priority ?? 3,
+    status: status ?? 'pending',
+    estimated_minutes: Number.isFinite(estimated_minutes) ? estimated_minutes : 0,
+    planned_datetime: planned_datetime || null,
+    due_datetime: due_datetime || null,
+    category: category ?? null,
+  };
 
-  try {
+  const runUpdate = async ({ includePlannedDateTime = true, includeCategory = true } = {}) => {
+    const assignments = [
+      'title = $1',
+      'notes = $2',
+      'priority = $3',
+      'status = $4',
+      'estimated_minutes = $5',
+    ];
+    const params = [
+      values.title,
+      values.notes,
+      values.priority,
+      values.status,
+      values.estimated_minutes,
+    ];
+
+    if (includePlannedDateTime) {
+      assignments.push(`planned_datetime = $${params.length + 1}`);
+      params.push(values.planned_datetime);
+    }
+
+    assignments.push(`due_datetime = $${params.length + 1}`);
+    params.push(values.due_datetime);
+
+    if (includeCategory) {
+      assignments.push(`category = $${params.length + 1}`);
+      params.push(values.category);
+    }
+
+    params.push(taskId);
+
     const result = await pool.query(
-      `UPDATE "Task" 
-       SET title = $1,
-           notes = $2,
-           priority = $3,
-           status = $4,
-           estimated_minutes = $5,
-           planned_datetime = $6,
-           due_datetime = $7,
-           category = $8
-       WHERE task_id = $9 
+      `UPDATE "Task"
+       SET ${assignments.join(', ')}
+       WHERE task_id = $${params.length}
        RETURNING *`,
       params
     );
     return result.rows[0];
+  };
+
+  try {
+    return await runUpdate();
   } catch (err) {
-    if (err instanceof Error && err.message?.includes('category') && err.message?.includes('does not exist')) {
-      const result = await pool.query(
-        `UPDATE "Task" 
-         SET title = $1,
-             notes = $2,
-             priority = $3,
-             status = $4,
-             estimated_minutes = $5,
-             planned_datetime = $6,
-             due_datetime = $7
-         WHERE task_id = $8 
-         RETURNING *`,
-        [params[0], params[1], params[2], params[3], params[4], params[5], params[6], taskId]
-      );
-      return result.rows[0];
+    if (isMissingColumnError(err, 'category')) {
+      try {
+        return await runUpdate({ includeCategory: false });
+      } catch (retryErr) {
+        if (isMissingColumnError(retryErr, 'planned_datetime')) {
+          return await runUpdate({ includePlannedDateTime: false, includeCategory: false });
+        }
+        console.error('Error updating task:', retryErr);
+        throw retryErr;
+      }
+    }
+
+    if (isMissingColumnError(err, 'planned_datetime')) {
+      try {
+        return await runUpdate({ includePlannedDateTime: false });
+      } catch (retryErr) {
+        if (isMissingColumnError(retryErr, 'category')) {
+          return await runUpdate({ includePlannedDateTime: false, includeCategory: false });
+        }
+        console.error('Error updating task:', retryErr);
+        throw retryErr;
+      }
     }
     console.error('Error updating task:', err);
+    throw err;
+  }
+}
+
+export async function deleteTask(userId, taskId) {
+  const result = await pool.query(
+    `DELETE FROM "Task" WHERE user_id = $1 AND task_id = $2 RETURNING *`,
+    [userId, taskId]
+  );
+  return result.rows[0];
+}
+
+export async function deleteTasksBySeriesId(userId, recurrenceSeriesId) {
+  const result = await pool.query(
+    `DELETE FROM "Task"
+     WHERE user_id = $1 AND recurrence_series_id = $2
+     RETURNING *`,
+    [userId, recurrenceSeriesId]
+  );
+  return result.rows;
+}
+
+export async function updateTaskStatus(taskId, userId, status) {
+  const normalizedStatus = typeof status === 'string' && status.trim()
+    ? status.trim().toLowerCase()
+    : 'pending';
+
+  try {
+    const result = await pool.query(
+      `UPDATE "Task"
+       SET status = $3
+       WHERE task_id = $1 AND user_id = $2
+       RETURNING *`,
+      [taskId, userId, normalizedStatus]
+    );
+    return result.rows[0];
+  } catch (err) {
+    console.error('Error updating task status:', err);
     throw err;
   }
 }
@@ -449,9 +635,40 @@ export async function getCalendarEvents(userId, { from, to } = {}) {
        ce.source,
        ce.external_uid,
        ce.is_all_day,
-       t.due_datetime AS task_due_datetime
+       ce.recurrence_series_id,
+       t.due_datetime AS task_due_datetime,
+       t.status AS task_status,
+       t.priority AS task_priority
      FROM "CalendarEvent" ce
      LEFT JOIN "Task" t ON t.task_id = ce.task_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY ce.start_datetime ASC`,
+    params
+  );
+  return result.rows;
+}
+
+export async function getConflictingCalendarEvents(userId, { start, end, excludeEventId, excludeTaskId } = {}) {
+  if (!start || !end) return [];
+  const params = [userId, start, end];
+  const where = [
+    'ce.user_id = $1',
+    'ce.start_datetime < $3',
+    'ce.end_datetime > $2',
+  ];
+
+  if (excludeEventId) {
+    params.push(excludeEventId);
+    where.push(`ce.event_id <> $${params.length}`);
+  }
+  if (excludeTaskId) {
+    params.push(excludeTaskId);
+    where.push(`(ce.task_id IS NULL OR ce.task_id <> $${params.length})`);
+  }
+
+  const result = await pool.query(
+    `SELECT ce.event_id, ce.task_id, ce.title, ce.start_datetime, ce.end_datetime, ce.source
+     FROM "CalendarEvent" ce
      WHERE ${where.join(' AND ')}
      ORDER BY ce.start_datetime ASC`,
     params
@@ -462,12 +679,24 @@ export async function getCalendarEvents(userId, { from, to } = {}) {
 export async function getCalendarEventById(userId, eventId) {
   const result = await pool.query(
     `SELECT event_id, user_id, title, description, start_datetime, end_datetime, status, source,
-            external_uid, is_all_day, google_event_id
+            external_uid, is_all_day, google_event_id, recurrence_series_id
      FROM "CalendarEvent"
      WHERE event_id = $1 AND user_id = $2`,
     [eventId, userId]
   );
   return result.rows[0];
+}
+
+export async function getCalendarEventsBySeriesId(userId, recurrenceSeriesId) {
+  const result = await pool.query(
+    `SELECT event_id, user_id, task_id, title, description, start_datetime, end_datetime, status, source,
+            external_uid, is_all_day, google_event_id, recurrence_series_id
+     FROM "CalendarEvent"
+     WHERE user_id = $1 AND recurrence_series_id = $2
+     ORDER BY start_datetime ASC`,
+    [userId, recurrenceSeriesId]
+  );
+  return result.rows;
 }
 
 export async function createCalendarEvent(userId, event) {
@@ -481,27 +710,54 @@ export async function createCalendarEvent(userId, event) {
     source,
     external_uid,
     is_all_day,
+    recurrence_series_id,
   } = event;
 
-  const result = await pool.query(
-    `INSERT INTO "CalendarEvent"
-      (user_id, task_id, title, description, start_datetime, end_datetime, status, source, external_uid, is_all_day)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     RETURNING *`,
-    [
-      userId,
-      task_id || null,
-      asNullIfEmpty(title),
-      asNullIfEmpty(description),
-      start_datetime || null,
-      end_datetime || null,
-      asNullIfEmpty(status) || 'scheduled',
-      asNullIfEmpty(source) || 'manual',
-      asNullIfEmpty(external_uid),
-      typeof is_all_day === 'boolean' ? is_all_day : false,
-    ]
-  );
-  return result.rows[0];
+  try {
+    const result = await pool.query(
+      `INSERT INTO "CalendarEvent"
+        (user_id, task_id, title, description, start_datetime, end_datetime, status, source, external_uid, is_all_day, recurrence_series_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING *`,
+      [
+        userId,
+        task_id || null,
+        asNullIfEmpty(title),
+        asNullIfEmpty(description),
+        start_datetime || null,
+        end_datetime || null,
+        asNullIfEmpty(status) || 'scheduled',
+        asNullIfEmpty(source) || 'manual',
+        asNullIfEmpty(external_uid),
+        typeof is_all_day === 'boolean' ? is_all_day : false,
+        recurrence_series_id || null,
+      ]
+    );
+    return result.rows[0];
+  } catch (err) {
+    if (err instanceof Error && err.message?.includes('recurrence_series_id') && err.message?.includes('does not exist')) {
+      const result = await pool.query(
+        `INSERT INTO "CalendarEvent"
+          (user_id, task_id, title, description, start_datetime, end_datetime, status, source, external_uid, is_all_day)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING *`,
+        [
+          userId,
+          task_id || null,
+          asNullIfEmpty(title),
+          asNullIfEmpty(description),
+          start_datetime || null,
+          end_datetime || null,
+          asNullIfEmpty(status) || 'scheduled',
+          asNullIfEmpty(source) || 'manual',
+          asNullIfEmpty(external_uid),
+          typeof is_all_day === 'boolean' ? is_all_day : false,
+        ]
+      );
+      return result.rows[0];
+    }
+    throw err;
+  }
 }
 
 export async function updateCalendarEvent(userId, eventId, updates) {
