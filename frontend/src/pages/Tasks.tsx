@@ -239,43 +239,14 @@ const Tasks = () => {
       });
     }
 
-  const displayedTasks = useMemo(() => {
-    const visibleTasks = tasks.filter((t) => t.status !== 'completed');
-    let filtered =
-      listScope === 'due_today'
-        ? visibleTasks.filter((t) => {
-            if (!t.due_datetime) return false;
-            const due = new Date(t.due_datetime).getTime();
-            return due >= startOfToday && due <= endOfToday;
-          })
-        : [...visibleTasks];
-
-    const byDueDate = (a: Task, b: Task) => {
-      const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-      const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-      return aDue - bDue;
-    };
-
-    const byPriorityThenDue = (a: Task, b: Task) => {
-      const prio = (a.priority || 3) - (b.priority || 3);
-      if (prio !== 0) return prio;
-      return byDueDate(a, b);
-    };
-
-    const byCategoryThenDue = (a: Task, b: Task) => {
-      const ac = (a.category || '').trim() || '\uFFFF';
-      const bc = (b.category || '').trim() || '\uFFFF';
-      const cmp = ac.localeCompare(bc, undefined, { sensitivity: 'base' });
-      if (cmp !== 0) return cmp;
-      return byDueDate(a, b);
-    };
-
-    if (organizeBy === 'due_date') {
-      filtered.sort(byDueDate);
-    } else if (organizeBy === 'priority') {
-      filtered.sort(byPriorityThenDue);
-    } else {
-      filtered.sort(byCategoryThenDue);
+    if (viewMode === 'by_priority') {
+      return [...filtered].sort((a, b) => {
+        const prio = (a.priority || 3) - (b.priority || 3);
+        if (prio !== 0) return prio; // 1 first, then 2, then 3
+        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
+        return aDue - bDue;
+      });
     }
 
     if (viewMode === 'completed') {
@@ -291,7 +262,7 @@ const Tasks = () => {
     }
 
     return filtered;
-  }, [tasks, listScope, organizeBy, startOfToday, endOfToday]);
+  })();
 
   // Time budget: available = (now → bedtime today) minus planned events
   const { availableMinutes, taskMinutesToday } = useMemo(() => {
@@ -375,20 +346,20 @@ const Tasks = () => {
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => setListScope('all')}
+            onClick={() => setViewMode('all')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              listScope === 'all'
+              viewMode === 'all'
                 ? 'bg-accent text-accent-foreground'
                 : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
             }`}
           >
-            All tasks
+            All Tasks
           </button>
           <button
             type="button"
-            onClick={() => setListScope('due_today')}
+            onClick={() => setViewMode('due_today')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              listScope === 'due_today'
+              viewMode === 'due_today'
                 ? 'bg-accent text-accent-foreground'
                 : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
             }`}
@@ -396,6 +367,7 @@ const Tasks = () => {
             Due Today
           </button>
           <button
+            type="button"
             onClick={() => setViewMode('passed')}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               viewMode === 'passed'
