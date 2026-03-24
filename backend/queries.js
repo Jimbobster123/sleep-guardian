@@ -96,11 +96,27 @@ export async function createTask(userId, task) {
   }
 }
 
+function normalizeTaskPlannedTimestamp(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string') {
+    const s = v.replace('T', ' ').trim().replace(/Z$/i, '');
+    const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (!m) return null;
+    const sec = m[4] != null ? m[4] : '00';
+    return `${m[1]} ${m[2]}:${m[3]}:${sec}`;
+  }
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())} ${pad(v.getUTCHours())}:${pad(v.getUTCMinutes())}:${pad(v.getUTCSeconds())}`;
+  }
+  return null;
+}
+
 export async function upsertTaskCalendarEvent(userId, task) {
   if (!task || !task.task_id) return null;
 
   const minutes = Number(task.estimated_minutes || 0);
-  const plannedStart = task.planned_datetime ? new Date(task.planned_datetime) : null;
+  const startStr = normalizeTaskPlannedTimestamp(task.planned_datetime);
 
   let plannedUpdated = null;
 
@@ -116,10 +132,8 @@ export async function upsertTaskCalendarEvent(userId, task) {
     [userId, task.task_id, 'task']
   );
 
-  // Planned calendar event
-  if (plannedStart && !Number.isNaN(plannedStart.getTime()) && minutes > 0) {
-    const plannedEnd = new Date(plannedStart.getTime() + minutes * 60 * 1000);
-
+  // Planned calendar event — end time via SQL interval so server timezone does not skew naive timestamps.
+  if (startStr && minutes > 0) {
     const existing = await pool.query(
       `SELECT event_id FROM "CalendarEvent"
        WHERE user_id = $1 AND task_id = $2 AND source = $3
@@ -132,8 +146,8 @@ export async function upsertTaskCalendarEvent(userId, task) {
         `UPDATE "CalendarEvent"
          SET title = $3,
              description = $4,
-             start_datetime = $5,
-             end_datetime = $6,
+             start_datetime = $5::timestamp,
+             end_datetime = $5::timestamp + ($6::int * interval '1 minute'),
              status = $7
          WHERE event_id = $1 AND user_id = $2
          RETURNING *`,
@@ -142,8 +156,8 @@ export async function upsertTaskCalendarEvent(userId, task) {
           userId,
           asNullIfEmpty(task.title),
           asNullIfEmpty(task.notes),
-          plannedStart,
-          plannedEnd,
+          startStr,
+          minutes,
           asNullIfEmpty(task.status) || 'scheduled',
         ]
       );
@@ -152,15 +166,15 @@ export async function upsertTaskCalendarEvent(userId, task) {
       const result = await pool.query(
         `INSERT INTO "CalendarEvent"
          (user_id, task_id, title, description, start_datetime, end_datetime, status, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         VALUES ($1, $2, $3, $4, $5::timestamp, $5::timestamp + ($6::int * interval '1 minute'), $7, $8)
          RETURNING *`,
         [
           userId,
           task.task_id,
           asNullIfEmpty(task.title),
           asNullIfEmpty(task.notes),
-          plannedStart,
-          plannedEnd,
+          startStr,
+          minutes,
           asNullIfEmpty(task.status) || 'scheduled',
           'task_planned',
         ]

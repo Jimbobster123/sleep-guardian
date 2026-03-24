@@ -1,9 +1,21 @@
 import PageHeader from '@/components/PageHeader';
 import { Sun, Moon, ChevronLeft, ChevronRight, Wand2, Plus, Calendar as CalendarIcon, CheckSquare, Clock3, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { format, addDays, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, eachDayOfInterval, isSameDay, isSameMonth, isToday } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
+import {
+  combineDateAndTimeForApi,
+  defaultEndOneHourAfterStart,
+  effectiveTimeZone,
+  formatTimestampForApi,
+  hourFloatInZone,
+  parseApiTimestamp,
+  parseApiTimestampToDate,
+  percentFromHourFloatFrom3am,
+  snapMinutesToQuarter,
+} from '@/lib/calendarTime';
+import { DateTime } from 'luxon';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -63,17 +75,13 @@ type Task = {
   due_datetime?: string;
 };
 
-function fmtPgLocal(ts?: string | null) {
-  if (!ts) return '';
-  // expects "YYYY-MM-DD HH:MM:SS"
-  const d = new Date(ts.replace(' ', 'T'));
-  if (Number.isNaN(d.getTime())) return ts;
-  return format(d, 'MMM d, h:mm a');
+function fmtPgLocal(ts: string | null | undefined, zone: string) {
+  const dt = parseApiTimestamp(ts, zone);
+  if (!dt) return ts ? String(ts) : '';
+  return dt.toFormat('MMM d, h:mm a');
 }
 
-function hourFloatFromDate(d: Date) {
-  return d.getHours() + d.getMinutes() / 60;
-}
+type DayViewEvent = DbEvent & { start: Date; end: Date };
 
 function timeTo12Hour(timeStr: string) {
   const [h, m] = (timeStr || '00:00').split(':').map(Number);
@@ -84,7 +92,8 @@ function timeTo12Hour(timeStr: string) {
 type CalendarView = 'day' | 'week' | 'month';
 
 const CalendarPage = () => {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const [day, setDay] = useState(() => new Date());
   const [viewMode, setViewMode] = useState<CalendarView>('day');
   const [events, setEvents] = useState<DbEvent[]>([]);
@@ -94,16 +103,21 @@ const CalendarPage = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [createTitle, setCreateTitle] = useState('');
   const [createDescription, setCreateDescription] = useState('');
+  const [createEventDate, setCreateEventDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [createStartTime, setCreateStartTime] = useState('09:00');
+  const [createEndDate, setCreateEndDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [createEndTime, setCreateEndTime] = useState('10:00');
+  const createStartTimeRef = useRef('09:00');
   const [createAllDay, setCreateAllDay] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingEvent, setEditingEvent] = useState<DbEvent | null>(null);
   const [editingEventTitle, setEditingEventTitle] = useState('');
   const [editingEventDescription, setEditingEventDescription] = useState('');
-  const [editingEventStart, setEditingEventStart] = useState('');
-  const [editingEventEnd, setEditingEventEnd] = useState('');
+  const [editingStartDate, setEditingStartDate] = useState('');
+  const [editingStartTime, setEditingStartTime] = useState('');
+  const [editingEndDate, setEditingEndDate] = useState('');
+  const [editingEndTime, setEditingEndTime] = useState('');
   const [editingEventAllDay, setEditingEventAllDay] = useState(false);
   const [savingEvent, setSavingEvent] = useState(false);
 
@@ -148,6 +162,16 @@ const CalendarPage = () => {
     };
   }, [token, fetchRange.from, fetchRange.to]);
 
+  createStartTimeRef.current = createStartTime;
+
+  useEffect(() => {
+    if (!createOpen) return;
+    setCreateEventDate(dateStr);
+    const { endDate, endTime } = defaultEndOneHourAfterStart(dateStr, createStartTimeRef.current, zone);
+    setCreateEndDate(endDate);
+    setCreateEndTime(endTime);
+  }, [createOpen, dateStr, zone]);
+
   const dow = day.getDay();
   const windowForDay = useMemo(() => {
     const w = (sleep?.windows || []).find((x) => x.day_of_week === dow);
@@ -156,19 +180,14 @@ const CalendarPage = () => {
 
   const sleepTimes = useMemo(() => {
     // If we have a suggestion, shade the calendar using the suggested sleep window.
-    const suggestedStart = suggestions?.sleep_window?.start ? new Date(String(suggestions.sleep_window.start).replace(' ', 'T')) : null;
-    const suggestedEnd = suggestions?.sleep_window?.end ? new Date(String(suggestions.sleep_window.end).replace(' ', 'T')) : null;
-    if (
-      suggestedStart &&
-      suggestedEnd &&
-      !Number.isNaN(suggestedStart.getTime()) &&
-      !Number.isNaN(suggestedEnd.getTime())
-    ) {
+    const s0 = suggestions?.sleep_window?.start ? parseApiTimestamp(String(suggestions.sleep_window.start), zone) : null;
+    const s1 = suggestions?.sleep_window?.end ? parseApiTimestamp(String(suggestions.sleep_window.end), zone) : null;
+    if (s0 && s1 && s0.isValid && s1.isValid) {
       return {
-        bedHour: hourFloatFromDate(suggestedStart),
-        wakeHour: hourFloatFromDate(suggestedEnd),
-        label: `${format(suggestedStart, 'h:mm a')} – ${format(suggestedEnd, 'h:mm a')}`,
-        source: 'suggested',
+        bedHour: s0.hour + s0.minute / 60 + s0.second / 3600,
+        wakeHour: s1.hour + s1.minute / 60 + s1.second / 3600,
+        label: `${s0.toFormat('h:mm a')} – ${s1.toFormat('h:mm a')}`,
+        source: 'suggested' as const,
       };
     }
 
@@ -180,7 +199,7 @@ const CalendarPage = () => {
       bedHour: (bh || 0) + (bm || 0) / 60,
       wakeHour: (wh || 0) + (wm || 0) / 60,
       label: `${timeTo12Hour(bed)} – ${timeTo12Hour(wake)}`,
-      source: 'saved',
+      source: 'saved' as const,
     };
   }, [windowForDay, sleep, suggestions]);
 
@@ -191,14 +210,22 @@ const CalendarPage = () => {
     return 'bg-cognitive-low text-foreground';
   };
 
-  const eventsForDay = useMemo(() => {
-    const start = new Date(`${dateStr}T00:00:00`);
-    const end = new Date(addDays(start, 1).getTime());
+  const eventsForDay = useMemo((): DayViewEvent[] => {
+    const day0 = parseApiTimestamp(`${dateStr} 00:00:00`, zone);
+    if (!day0) return [];
+    const day1 = day0.plus({ days: 1 });
+    const startMs = day0.toMillis();
+    const endMs = day1.toMillis();
     return events
-      .map((e) => ({ ...e, start: new Date(e.start_datetime), end: new Date(e.end_datetime) }))
-      .filter((e) => e.start < end && e.end > start)
+      .map((e) => {
+        const s = parseApiTimestampToDate(e.start_datetime, zone);
+        const en = parseApiTimestampToDate(e.end_datetime, zone);
+        if (!s || !en) return null;
+        return { ...e, start: s, end: en };
+      })
+      .filter((e): e is DayViewEvent => Boolean(e && e.start.getTime() < endMs && e.end.getTime() > startMs))
       .sort((a, b) => a.start.getTime() - b.start.getTime());
-  }, [events, dateStr]);
+  }, [events, dateStr, zone]);
 
   const weekDays = useMemo(() => {
     if (viewMode !== 'week') return [];
@@ -232,8 +259,9 @@ const CalendarPage = () => {
       byDay[key] = [];
     });
     events.forEach((e) => {
-      const start = new Date(e.start_datetime);
-      const end = new Date(e.end_datetime);
+      const start = parseApiTimestampToDate(e.start_datetime, zone);
+      const end = parseApiTimestampToDate(e.end_datetime, zone);
+      if (!start || !end) return;
       weekDays.forEach((d) => {
         const dayStart = new Date(d);
         dayStart.setHours(0, 0, 0, 0);
@@ -246,7 +274,7 @@ const CalendarPage = () => {
     });
     Object.keys(byDay).forEach((k) => byDay[k].sort((a, b) => a.start.getTime() - b.start.getTime()));
     return byDay;
-  }, [events, weekDays]);
+  }, [events, weekDays, zone]);
 
   const monthGrid = useMemo(() => {
     if (viewMode !== 'month') return { days: [] as Date[], firstDay: 0 };
@@ -273,8 +301,9 @@ const CalendarPage = () => {
       byDay[key] = [];
     });
     events.forEach((e) => {
-      const start = new Date(e.start_datetime);
-      const end = new Date(e.end_datetime);
+      const start = parseApiTimestampToDate(e.start_datetime, zone);
+      const end = parseApiTimestampToDate(e.end_datetime, zone);
+      if (!start || !end) return;
       monthGrid.days.forEach((d) => {
         const dayStart = new Date(d);
         dayStart.setHours(0, 0, 0, 0);
@@ -287,7 +316,7 @@ const CalendarPage = () => {
     });
     Object.keys(byDay).forEach((k) => byDay[k].sort((a, b) => a.start.getTime() - b.start.getTime()));
     return byDay;
-  }, [events, monthGrid.days]);
+  }, [events, monthGrid.days, zone]);
 
   // Current time line: only for today, position based on hour (3am = 0)
   const [now, setNow] = useState(() => new Date());
@@ -300,10 +329,210 @@ const CalendarPage = () => {
   }, [isViewingToday]);
   const currentTimeTopPercent = useMemo(() => {
     if (!isViewingToday) return null;
-    const hour = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+    const hour = hourFloatInZone(now, zone);
     const hoursFrom3am = (hour - 3 + 24) % 24;
     return (hoursFrom3am / 24) * 100;
-  }, [isViewingToday, now]);
+  }, [isViewingToday, now, zone]);
+
+  const dayTimelineRef = useRef<HTMLDivElement | null>(null);
+  const [draggingEventId, setDraggingEventId] = useState<string | null>(null);
+  const [dragPreviewStartMs, setDragPreviewStartMs] = useState<number | null>(null);
+  /** Keeps the bar at the drop position until persist + reload finish (avoids one frame at old time). */
+  const [postDropPlacement, setPostDropPlacement] = useState<{
+    eventId: string;
+    startMs: number;
+    endMs: number;
+  } | null>(null);
+  const dragSessionRef = useRef<{
+    pointerId: number;
+    anchorY: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+    height: number;
+    origStartMs: number;
+    origEndMs: number;
+    event: DayViewEvent;
+  } | null>(null);
+
+  const reloadCalendarEvents = useCallback(async () => {
+    if (!token) return;
+    const evRes = await apiJson<DbEvent[]>(
+      `/api/me/calendar-events?from=${encodeURIComponent(`${fetchRange.from} 00:00:00`)}&to=${encodeURIComponent(`${fetchRange.to} 00:00:00`)}`,
+      { token },
+    );
+    setEvents(evRes);
+  }, [token, fetchRange.from, fetchRange.to]);
+
+  const persistEventTimeMove = useCallback(
+    async (ev: DayViewEvent, newStart: Date, newEnd: Date) => {
+      if (!token) return;
+      const durMin = Math.max(1, Math.round((newEnd.getTime() - newStart.getTime()) / 60_000));
+      if (ev.source === 'task_planned' && ev.task_id) {
+        const task = await apiJson<Task>(`/api/me/tasks/${ev.task_id}`, { token });
+        await apiJson(`/api/me/tasks/${ev.task_id}`, {
+          method: 'PUT',
+          token,
+          body: JSON.stringify({
+            ...task,
+            planned_datetime: formatTimestampForApi(newStart, zone),
+            estimated_minutes: durMin,
+          }),
+        });
+      } else if (ev.source === 'task_due' && ev.task_id) {
+        const task = await apiJson<Task>(`/api/me/tasks/${ev.task_id}`, { token });
+        await apiJson(`/api/me/tasks/${ev.task_id}`, {
+          method: 'PUT',
+          token,
+          body: JSON.stringify({
+            ...task,
+            due_datetime: formatTimestampForApi(newStart, zone),
+          }),
+        });
+      } else {
+        await apiJson(`/api/me/calendar-events/${encodeURIComponent(ev.event_id)}`, {
+          method: 'PUT',
+          token,
+          body: JSON.stringify({
+            start_datetime: formatTimestampForApi(newStart, zone),
+            end_datetime: formatTimestampForApi(newEnd, zone),
+          }),
+        });
+      }
+      await reloadCalendarEvents();
+    },
+    [token, zone, reloadCalendarEvents],
+  );
+
+  const openEventEditor = useCallback(
+    async (event: DayViewEvent) => {
+      if (!token) return;
+      if ((event.source === 'task_planned' || event.source === 'task_due') && event.task_id) {
+        const task = await apiJson<Task>(`/api/me/tasks/${event.task_id}`, { token });
+        setEditingTask(task);
+        return;
+      }
+      setEditingEvent(event);
+      setEditingEventTitle(event.title || '');
+      setEditingEventDescription(event.description || '');
+      const s = parseApiTimestamp(event.start_datetime, zone);
+      const en = parseApiTimestamp(event.end_datetime, zone);
+      if (s?.isValid) {
+        setEditingStartDate(s.toFormat('yyyy-MM-dd'));
+        setEditingStartTime(s.toFormat('HH:mm'));
+      } else {
+        setEditingStartDate('');
+        setEditingStartTime('');
+      }
+      if (en?.isValid) {
+        setEditingEndDate(en.toFormat('yyyy-MM-dd'));
+        setEditingEndTime(en.toFormat('HH:mm'));
+      } else {
+        setEditingEndDate('');
+        setEditingEndTime('');
+      }
+      setEditingEventAllDay(Boolean(event.is_all_day));
+    },
+    [token, zone],
+  );
+
+  const snappedStartMillisFromClientY = useCallback(
+    (clientY: number): number | null => {
+      const rect = dayTimelineRef.current?.getBoundingClientRect();
+      if (!rect || rect.height < 1) return null;
+      const y = clientY - rect.top;
+      const frac = Math.max(0, Math.min(1, y / rect.height));
+      const strip0 = parseApiTimestamp(`${dateStr} 03:00:00`, zone);
+      if (!strip0) return null;
+      const snappedMin = snapMinutesToQuarter(Math.round(frac * 24 * 60));
+      return strip0.plus({ minutes: snappedMin }).toMillis();
+    },
+    [dateStr, zone],
+  );
+
+  const DRAG_THRESHOLD_PX = 6;
+
+  const onDragPointerDown = useCallback(
+    (e: ReactPointerEvent, ev: DayViewEvent) => {
+      if (ev.is_all_day) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const timeline = dayTimelineRef.current;
+      if (!timeline) return;
+      dragSessionRef.current = {
+        pointerId: e.pointerId,
+        anchorY: e.clientY,
+        startX: e.clientX,
+        startY: e.clientY,
+        moved: false,
+        height: Math.max(timeline.getBoundingClientRect().height, 1),
+        origStartMs: ev.start.getTime(),
+        origEndMs: ev.end.getTime(),
+        event: ev,
+      };
+      setDragPreviewStartMs(ev.start.getTime());
+      setDraggingEventId(ev.event_id);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!draggingEventId) return;
+    const sess = dragSessionRef.current;
+    if (!sess) return;
+    const pid = sess.pointerId;
+
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pid) return;
+      const s = dragSessionRef.current;
+      if (!s) return;
+      if (Math.hypot(e.clientX - s.startX, e.clientY - s.startY) > DRAG_THRESHOLD_PX) {
+        s.moved = true;
+      }
+      if (!s.moved) return;
+      const ms = snappedStartMillisFromClientY(e.clientY);
+      if (ms != null) setDragPreviewStartMs(ms);
+    };
+
+    const finish = async (e: PointerEvent) => {
+      if (e.pointerId !== pid) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+
+      const ms = snappedStartMillisFromClientY(e.clientY);
+      const ev = sess.event;
+      const didMove = sess.moved;
+      dragSessionRef.current = null;
+      setDraggingEventId(null);
+      setDragPreviewStartMs(null);
+
+      if (!didMove) {
+        void openEventEditor(ev);
+        return;
+      }
+
+      if (ms == null) return;
+      const dur = sess.origEndMs - sess.origStartMs;
+      const newStart = new Date(ms);
+      const newEnd = new Date(ms + dur);
+      setPostDropPlacement({ eventId: ev.event_id, startMs: ms, endMs: ms + dur });
+      try {
+        await persistEventTimeMove(ev, newStart, newEnd);
+      } finally {
+        setPostDropPlacement(null);
+      }
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+    };
+  }, [draggingEventId, snappedStartMillisFromClientY, persistEventTimeMove, openEventEditor]);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -421,7 +650,7 @@ const CalendarPage = () => {
                     Add event
                   </DialogTitle>
                   <DialogDescription>
-                    Create a manual calendar event for {format(day, 'MMM d, yyyy')}.
+                    All times are saved in your profile timezone: <span className="font-medium text-foreground">{zone}</span>.
                   </DialogDescription>
                 </DialogHeader>
 
@@ -441,7 +670,26 @@ const CalendarPage = () => {
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-3">
+                  <div className="rounded-lg border border-border/50 bg-muted/30 p-3 space-y-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-foreground">Event date</label>
+                      <Input
+                        type="date"
+                        value={createEventDate}
+                        onChange={(e) => {
+                          const d = e.target.value;
+                          setCreateEventDate(d);
+                          const { endDate, endTime } = defaultEndOneHourAfterStart(d, createStartTime, zone);
+                          setCreateEndDate(endDate);
+                          setCreateEndTime(endTime);
+                        }}
+                        className="h-10 max-w-[220px]"
+                      />
+                      <p className="text-[10px] text-muted-foreground">
+                        Defaults to the day you are viewing; change it to schedule on another day.
+                      </p>
+                    </div>
+
                     <label className="flex items-center gap-2 text-xs text-foreground">
                       <input
                         type="checkbox"
@@ -449,31 +697,68 @@ const CalendarPage = () => {
                         onChange={(e) => setCreateAllDay(e.target.checked)}
                         className="accent-accent"
                       />
-                      All day
+                      All day (no specific start/end time)
                     </label>
 
-                    <div className="flex items-center gap-2">
-                      <div className="space-y-1">
-                        <label className="text-[10px] text-muted-foreground">Start</label>
-                        <Input
-                          type="time"
-                          value={createStartTime}
-                          onChange={(e) => setCreateStartTime(e.target.value)}
-                          disabled={createAllDay}
-                          className="h-9 w-[130px]"
-                        />
+                    {!createAllDay ? (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-foreground">Starts at</label>
+                          <Input
+                            type="time"
+                            step={900}
+                            value={createStartTime}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setCreateStartTime(v);
+                              const { endDate, endTime } = defaultEndOneHourAfterStart(createEventDate, v, zone);
+                              setCreateEndDate(endDate);
+                              setCreateEndTime(endTime);
+                            }}
+                            className="h-10"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-foreground">Ends at</label>
+                          {createEndDate !== createEventDate ? (
+                            <Input
+                              type="date"
+                              value={createEndDate}
+                              onChange={(e) => setCreateEndDate(e.target.value)}
+                              className="h-10 mb-1"
+                            />
+                          ) : null}
+                          <Input
+                            type="time"
+                            step={900}
+                            value={createEndTime}
+                            onChange={(e) => setCreateEndTime(e.target.value)}
+                            className="h-10"
+                          />
+                        </div>
                       </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] text-muted-foreground">End</label>
-                        <Input
-                          type="time"
-                          value={createEndTime}
-                          onChange={(e) => setCreateEndTime(e.target.value)}
-                          disabled={createAllDay}
-                          className="h-9 w-[130px]"
-                        />
-                      </div>
-                    </div>
+                    ) : null}
+
+                    {!createAllDay && createEventDate ? (
+                      <p className="text-xs text-foreground rounded-md bg-background/80 border border-border/40 px-2 py-1.5">
+                        <span className="font-medium">Preview:</span>{' '}
+                        {(() => {
+                          const a = combineDateAndTimeForApi(createEventDate, createStartTime, zone);
+                          const b = combineDateAndTimeForApi(createEndDate, createEndTime, zone);
+                          const da = parseApiTimestamp(a, zone);
+                          const db = parseApiTimestamp(b, zone);
+                          if (!da?.isValid || !db?.isValid) return 'Enter a valid date and times.';
+                          const sameDay = da.toFormat('yyyy-MM-dd') === db.toFormat('yyyy-MM-dd');
+                          return `${da.toFormat('EEE MMM d, h:mm a')} → ${sameDay ? db.toFormat('h:mm a') : db.toFormat('EEE MMM d, h:mm a')}`;
+                        })()}
+                      </p>
+                    ) : createAllDay && createEventDate ? (
+                      <p className="text-xs text-foreground rounded-md bg-background/80 border border-border/40 px-2 py-1.5">
+                        <span className="font-medium">Preview:</span> All day on{' '}
+                        {parseApiTimestamp(`${createEventDate} 12:00:00`, zone)?.toFormat('EEE MMM d, yyyy') ??
+                          createEventDate}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 
@@ -487,8 +772,12 @@ const CalendarPage = () => {
                       setCreating(true);
                       try {
                         const title = createTitle.trim();
-                        const start = createAllDay ? `${dateStr}T00:00:00` : `${dateStr}T${createStartTime}:00`;
-                        const end = createAllDay ? `${dateStr}T23:59:59` : `${dateStr}T${createEndTime}:00`;
+                        const start = createAllDay
+                          ? `${createEventDate} 00:00:00`
+                          : combineDateAndTimeForApi(createEventDate, createStartTime, zone);
+                        const end = createAllDay
+                          ? `${createEventDate} 23:59:59`
+                          : combineDateAndTimeForApi(createEndDate, createEndTime, zone);
                         const created = await apiJson<DbEvent>('/api/me/calendar-events', {
                           method: 'POST',
                           token,
@@ -507,6 +796,7 @@ const CalendarPage = () => {
                         setCreateTitle('');
                         setCreateDescription('');
                         setCreateStartTime('09:00');
+                        setCreateEndDate(dateStr);
                         setCreateEndTime('10:00');
                         setCreateAllDay(false);
                       } finally {
@@ -526,7 +816,7 @@ const CalendarPage = () => {
           <div className="mb-4 bg-card border border-border/50 rounded-xl p-3">
             <p className="text-xs text-foreground font-medium mb-1">Suggested sleep window</p>
             <p className="text-xs text-muted-foreground">
-              {fmtPgLocal(suggestions.sleep_window.start)} – {fmtPgLocal(suggestions.sleep_window.end)}
+              {fmtPgLocal(suggestions.sleep_window.start, zone)} – {fmtPgLocal(suggestions.sleep_window.end, zone)}
               {suggestions?.moved_sleep_window ? (
                 <span className="text-muted-foreground"> (adjusted to fit your schedule)</span>
               ) : null}
@@ -537,134 +827,155 @@ const CalendarPage = () => {
           </div>
         ) : null}
 
-        {/* Day view */}
+        {/* Day view — timeline with 3am anchor; events positioned by wall time in profile zone */}
         <div className={viewMode === 'day' ? 'block' : 'hidden'}>
-        <div className="bg-card rounded-xl shadow-sm border border-border/50 overflow-hidden">
-          <div className="relative">
-            {/* Current time indicator - only on today */}
-            {isViewingToday && currentTimeTopPercent != null && (
-              <div
-                className="absolute left-32 right-0 z-10 pointer-events-none flex items-center gap-2"
-                style={{ top: `${currentTimeTopPercent}%` }}
-              >
-                <div className="w-2 h-2 rounded-full bg-destructive flex-shrink-0" />
-                <div className="flex-1 h-px bg-destructive/80" />
-                <span className="text-[10px] font-medium text-destructive pr-2">
-                  {format(now, 'h:mm a')}
-                </span>
-              </div>
-            )}
-            {hours.map(({ hour, label }) => {
-              const eventStarts = eventsForDay.filter((e) => e.start.getHours() === hour);
-              const inSleepWindow =
-                sleepTimes.bedHour >= sleepTimes.wakeHour
-                  ? hour >= Math.floor(sleepTimes.bedHour) || hour < Math.floor(sleepTimes.wakeHour)
-                  : hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(sleepTimes.wakeHour);
-              const inWakeWindow = hour >= Math.floor(sleepTimes.wakeHour) && hour < Math.floor(sleepTimes.wakeHour) + 1;
-              const isWakeRow = hour === Math.floor(sleepTimes.wakeHour);
-              const isBedRow = hour === Math.floor(sleepTimes.bedHour);
-
-              return (
-                <div
-                  key={hour}
-                  className={`relative flex border-b border-border/30 min-h-[3rem] ${
-                    inSleepWindow ? 'sleep-window-bg' : inWakeWindow ? 'wake-window-bg' : ''
-                  }`}
-                >
-                  {isWakeRow && (
-                    <>
-                      <div className="absolute top-0 left-0 right-0 h-px bg-warning/60 z-10" />
-                      <div className="absolute left-2 top-1/2 -translate-y-1/2 z-10">
-                        <Sun className="w-4 h-4 text-warning" />
-                      </div>
-                    </>
-                  )}
-                  {isBedRow && (
-                    <>
-                      <div className="absolute top-0 left-0 right-0 h-px bg-sleep/60 z-10" />
-                      <div className="absolute left-2 top-1/2 -translate-y-1/2 z-10">
-                        <Moon className="w-4 h-4 text-sleep" />
-                      </div>
-                    </>
-                  )}
-                  <div className="w-12 flex-shrink-0" />
-                  <div className="w-20 py-2 px-3 text-[11px] text-muted-foreground flex-shrink-0 border-r border-border/30">
+          <p className="text-[11px] text-muted-foreground mb-2 px-1">
+            Times use your profile timezone ({zone}). Drag an event to reschedule; tap without dragging to edit.
+          </p>
+          <div className="bg-card rounded-xl shadow-sm border border-border/50 overflow-hidden">
+            <div className="flex">
+              <div className="w-[7.5rem] flex-shrink-0 border-r border-border/30 flex flex-col bg-card">
+                {hours.map(({ hour, label }) => (
+                  <div
+                    key={hour}
+                    className="min-h-[3rem] border-b border-border/30 py-2 px-2 text-[11px] text-muted-foreground"
+                  >
                     {label}
                   </div>
-                  <div className="flex-1 p-1 relative">
-                    {eventStarts.map((event) => (
-                      <button
+                ))}
+              </div>
+              <div ref={dayTimelineRef} className="flex-1 relative min-h-[72rem] bg-background/30">
+                {hours.map(({ hour }) => {
+                  const inSleepWindow =
+                    sleepTimes.bedHour >= sleepTimes.wakeHour
+                      ? hour >= Math.floor(sleepTimes.bedHour) || hour < Math.floor(sleepTimes.wakeHour)
+                      : hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(sleepTimes.wakeHour);
+                  const inWakeWindow =
+                    hour >= Math.floor(sleepTimes.wakeHour) && hour < Math.floor(sleepTimes.wakeHour) + 1;
+                  const isWakeRow = hour === Math.floor(sleepTimes.wakeHour);
+                  const isBedRow = hour === Math.floor(sleepTimes.bedHour);
+                  return (
+                    <div
+                      key={hour}
+                      className={`relative min-h-[3rem] border-b border-border/30 ${
+                        inSleepWindow ? 'sleep-window-bg' : inWakeWindow ? 'wake-window-bg' : ''
+                      }`}
+                    >
+                      {isWakeRow && (
+                        <>
+                          <div className="absolute top-0 left-0 right-0 h-px bg-warning/60 z-[5]" />
+                          <div className="absolute left-2 top-1/2 -translate-y-1/2 z-[5] pointer-events-none">
+                            <Sun className="w-4 h-4 text-warning" />
+                          </div>
+                        </>
+                      )}
+                      {isBedRow && (
+                        <>
+                          <div className="absolute top-0 left-0 right-0 h-px bg-sleep/60 z-[5]" />
+                          <div className="absolute left-2 top-1/2 -translate-y-1/2 z-[5] pointer-events-none">
+                            <Moon className="w-4 h-4 text-sleep" />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+                {isViewingToday && currentTimeTopPercent != null && (
+                  <div
+                    className="absolute left-0 right-0 z-20 pointer-events-none flex items-center gap-2"
+                    style={{ top: `${currentTimeTopPercent}%` }}
+                  >
+                    <div className="w-2 h-2 rounded-full bg-destructive flex-shrink-0" />
+                    <div className="flex-1 h-px bg-destructive/80" />
+                    <span className="text-[10px] font-medium text-destructive pr-2">
+                      {DateTime.fromJSDate(now).setZone(zone).toFormat('h:mm a')}
+                    </span>
+                  </div>
+                )}
+                <div className="absolute inset-0 z-30 px-1 pointer-events-none">
+                  {eventsForDay.map((event) => {
+                    let sTime = event.start.getTime();
+                    let eTime = event.end.getTime();
+                    if (postDropPlacement?.eventId === event.event_id) {
+                      sTime = postDropPlacement.startMs;
+                      eTime = postDropPlacement.endMs;
+                    } else if (draggingEventId === event.event_id && dragPreviewStartMs != null) {
+                      const d = eTime - sTime;
+                      sTime = dragPreviewStartMs;
+                      eTime = dragPreviewStartMs + d;
+                    }
+                    const s = new Date(sTime);
+                    const en = new Date(eTime);
+                    const startH = hourFloatInZone(s, zone);
+                    const durH = Math.max(0.25, (en.getTime() - s.getTime()) / 3_600_000);
+                    const top = percentFromHourFloatFrom3am(startH);
+                    const hPct = (durH / 24) * 100;
+                    const draggable = !event.is_all_day;
+                    const startLabel = DateTime.fromJSDate(s).setZone(zone).toFormat('h:mm a');
+                    const endLabel = DateTime.fromJSDate(en).setZone(zone).toFormat('h:mm a');
+                    return (
+                      <div
                         key={event.event_id}
-                        type="button"
-                        onClick={async () => {
-                          if (!token) return;
-                          if ((event.source === 'task_planned' || event.source === 'task_due') && event.task_id) {
-                            const task = await apiJson<Task>(`/api/me/tasks/${event.task_id}`, { token });
-                            setEditingTask(task);
-                          } else {
-                            setEditingEvent(event);
-                            setEditingEventTitle(event.title || '');
-                            setEditingEventDescription(event.description || '');
-                            const toLocalInput = (value: string) => {
-                              const d = new Date(value);
-                              if (Number.isNaN(d.getTime())) return '';
-                              const year = d.getFullYear();
-                              const month = String(d.getMonth() + 1).padStart(2, '0');
-                              const day = String(d.getDate()).padStart(2, '0');
-                              const hours = String(d.getHours()).padStart(2, '0');
-                              const minutes = String(d.getMinutes()).padStart(2, '0');
-                              return `${year}-${month}-${day}T${hours}:${minutes}`;
-                            };
-                            setEditingEventStart(toLocalInput(event.start_datetime));
-                            setEditingEventEnd(toLocalInput(event.end_datetime));
-                            setEditingEventAllDay(Boolean(event.is_all_day));
-                          }
+                        className={`absolute left-1 right-1 rounded-lg overflow-hidden border border-border/40 shadow-sm pointer-events-auto select-none ${
+                          draggable
+                            ? 'cursor-grab active:cursor-grabbing touch-none'
+                            : 'cursor-pointer'
+                        }`}
+                        style={{
+                          top: `${top}%`,
+                          height: `${hPct}%`,
+                          minHeight: '1.75rem',
                         }}
-                        className={`w-full text-left rounded-md px-2.5 py-1.5 text-xs font-medium ${getEventStyle(event.source)} mb-1`}
+                        onPointerDown={draggable ? (e) => onDragPointerDown(e, event) : undefined}
+                        onClick={!draggable ? () => void openEventEditor(event) : undefined}
+                        role={!draggable ? 'button' : undefined}
+                        tabIndex={!draggable ? 0 : undefined}
+                        onKeyDown={
+                          !draggable
+                            ? (e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  void openEventEditor(event);
+                                }
+                              }
+                            : undefined
+                        }
                       >
-                        <div className="flex items-center gap-1.5">
-                          {event.source === 'task_planned' ? (
-                            <CheckSquare className="w-3.5 h-3.5 text-accent" />
-                          ) : event.source === 'task_due' ? (
-                            <Clock3 className="w-3.5 h-3.5 text-accent" />
-                          ) : inWakeWindow ? (
-                            <Sun className="w-3.5 h-3.5" />
-                          ) : inSleepWindow ? (
-                            <Moon className="w-3.5 h-3.5" />
-                          ) : null}
-                          <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded-sm border ${
-                              event.source === 'task_planned'
-                                ? 'border-accent/40 text-accent bg-accent/10'
+                        <div className={`h-full text-left px-2 py-1.5 text-xs font-medium min-w-0 ${getEventStyle(event.source)}`}>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            {event.source === 'task_planned' ? (
+                              <CheckSquare className="w-3.5 h-3.5 text-accent flex-shrink-0" />
+                            ) : event.source === 'task_due' ? (
+                              <Clock3 className="w-3.5 h-3.5 text-accent flex-shrink-0" />
+                            ) : null}
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded-sm border flex-shrink-0 ${
+                                event.source === 'task_planned'
+                                  ? 'border-accent/40 text-accent bg-accent/10'
+                                  : event.source === 'task_due'
+                                    ? 'border-accent/60 text-accent bg-accent/20'
+                                    : 'border-border/40 text-muted-foreground bg-background/40'
+                              }`}
+                            >
+                              {event.source === 'task_planned'
+                                ? 'PLANNED'
                                 : event.source === 'task_due'
-                                  ? 'border-accent/60 text-accent bg-accent/20'
-                                : 'border-border/40 text-muted-foreground bg-background/40'
-                            }`}
-                          >
-                            {event.source === 'task_planned' ? 'PLANNED TASK' : event.source === 'task_due' ? 'DUE DATE' : 'EVENT'}
-                          </span>
-                          <span className="truncate">{event.title || 'Event'}</span>
-                          <div className="ml-auto flex flex-col items-end gap-0.5 text-[10px] opacity-80">
-                            {event.source === 'task_planned' && (
-                              <span>
-                                planned time {format(event.start, 'MMM d h:mm a')}–{format(event.end, 'h:mm a')}
-                              </span>
-                            )}
-                            {event.source === 'task_due' && (
-                              <span>
-                                due date {format(event.start, 'MMM d h:mm a')}
-                              </span>
-                            )}
+                                  ? 'DUE'
+                                  : 'EVENT'}
+                            </span>
+                            <span className="truncate font-medium">{event.title || 'Event'}</span>
+                          </div>
+                          <div className="text-[10px] opacity-85 mt-0.5">
+                            {startLabel} – {endLabel}
                           </div>
                         </div>
-                      </button>
-                    ))}
-                  </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </div>
+            </div>
           </div>
-        </div>
         </div>
 
         {/* Week view */}
@@ -703,8 +1014,8 @@ const CalendarPage = () => {
                   const hourStart = hour;
                   const hourEnd = hour + 1;
                   const dayEvents = (eventsForWeekDay[dayKey] || []).filter((x) => {
-                    const startH = hourFloatFromDate(x.start);
-                    const endH = hourFloatFromDate(x.end);
+                    const startH = hourFloatInZone(x.start, zone);
+                    const endH = hourFloatInZone(x.end, zone);
                     return startH < hourEnd && endH > hourStart;
                   });
                   const bgStyles = inSleepWindow ? 'sleep-window-bg' : inWakeWindow ? 'wake-window-bg' : '';
@@ -717,30 +1028,7 @@ const CalendarPage = () => {
                         <button
                           key={event.event_id}
                           type="button"
-                          onClick={async () => {
-                            if (!token) return;
-                            if ((event.source === 'task_planned' || event.source === 'task_due') && event.task_id) {
-                              const task = await apiJson<Task>(`/api/me/tasks/${event.task_id}`, { token });
-                              setEditingTask(task);
-                            } else {
-                              setEditingEvent(event);
-                              setEditingEventTitle(event.title || '');
-                              setEditingEventDescription(event.description || '');
-                              const toLocalInput = (value: string) => {
-                                const d = new Date(value);
-                                if (Number.isNaN(d.getTime())) return '';
-                                const y = d.getFullYear();
-                                const m = String(d.getMonth() + 1).padStart(2, '0');
-                                const dayNum = String(d.getDate()).padStart(2, '0');
-                                const h = String(d.getHours()).padStart(2, '0');
-                                const min = String(d.getMinutes()).padStart(2, '0');
-                                return `${y}-${m}-${dayNum}T${h}:${min}`;
-                              };
-                              setEditingEventStart(toLocalInput(event.start_datetime));
-                              setEditingEventEnd(toLocalInput(event.end_datetime));
-                              setEditingEventAllDay(Boolean(event.is_all_day));
-                            }
-                          }}
+                          onClick={() => void openEventEditor({ ...event, start, end })}
                           className={`w-full text-left rounded px-1.5 py-0.5 text-[10px] truncate ${getEventStyle(event.source)}`}
                         >
                           {event.title || 'Event'}
@@ -794,30 +1082,9 @@ const CalendarPage = () => {
                       <button
                         key={event.event_id}
                         type="button"
-                        onClick={async (e) => {
+                        onClick={(e) => {
                           e.stopPropagation();
-                          if (!token) return;
-                          if ((event.source === 'task_planned' || event.source === 'task_due') && event.task_id) {
-                            const task = await apiJson<Task>(`/api/me/tasks/${event.task_id}`, { token });
-                            setEditingTask(task);
-                          } else {
-                            setEditingEvent(event);
-                            setEditingEventTitle(event.title || '');
-                            setEditingEventDescription(event.description || '');
-                            const toLocalInput = (value: string) => {
-                              const dt = new Date(value);
-                              if (Number.isNaN(dt.getTime())) return '';
-                              const y = dt.getFullYear();
-                              const m = String(dt.getMonth() + 1).padStart(2, '0');
-                              const dayNum = String(dt.getDate()).padStart(2, '0');
-                              const h = String(dt.getHours()).padStart(2, '0');
-                              const min = String(dt.getMinutes()).padStart(2, '0');
-                              return `${y}-${m}-${dayNum}T${h}:${min}`;
-                            };
-                            setEditingEventStart(toLocalInput(event.start_datetime));
-                            setEditingEventEnd(toLocalInput(event.end_datetime));
-                            setEditingEventAllDay(Boolean(event.is_all_day));
-                          }
+                          void openEventEditor({ ...event, start, end });
                         }}
                         className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate block ${getEventStyle(event.source)}`}
                       >
@@ -846,7 +1113,7 @@ const CalendarPage = () => {
                     <span className="font-medium">{c.title || 'Event'}</span>{' '}
                     <span className="text-muted-foreground">
                       {c.suggested_start_datetime
-                        ? `→ ${fmtPgLocal(c.suggested_start_datetime)}–${fmtPgLocal(c.suggested_end_datetime)}`
+                        ? `→ ${fmtPgLocal(c.suggested_start_datetime, zone)}–${fmtPgLocal(c.suggested_end_datetime, zone)}`
                         : '(no shift found)'}
                     </span>
                   </div>
@@ -864,13 +1131,7 @@ const CalendarPage = () => {
                           }),
                         });
 
-                        const evRes = await apiJson<DbEvent[]>(
-                          `/api/me/calendar-events?from=${encodeURIComponent(`${dateStr} 00:00:00`)}&to=${encodeURIComponent(
-                            `${format(addDays(day, 2), 'yyyy-MM-dd')} 00:00:00`,
-                          )}`,
-                          { token },
-                        );
-                        setEvents(evRes);
+                        await reloadCalendarEvents();
                       }}
                     >
                       Apply
@@ -906,14 +1167,7 @@ const CalendarPage = () => {
               token,
               body: JSON.stringify(updated),
             });
-            // Refresh events so calendar reflects changes
-            const evRes = await apiJson<DbEvent[]>(
-              `/api/me/calendar-events?from=${encodeURIComponent(`${dateStr} 00:00:00`)}&to=${encodeURIComponent(
-                `${format(addDays(day, 2), 'yyyy-MM-dd')} 00:00:00`,
-              )}`,
-              { token },
-            );
-            setEvents(evRes);
+            await reloadCalendarEvents();
           }}
         />
       )}
@@ -925,13 +1179,19 @@ const CalendarPage = () => {
           if (!open) {
             setEditingEvent(null);
             setSavingEvent(false);
+            setEditingStartDate('');
+            setEditingStartTime('');
+            setEditingEndDate('');
+            setEditingEndTime('');
           }
         }}
       >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit event</DialogTitle>
-            <DialogDescription>Update this calendar event or delete it.</DialogDescription>
+            <DialogDescription>
+              Times use your profile timezone: <span className="font-medium text-foreground">{zone}</span>.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1">
@@ -946,39 +1206,89 @@ const CalendarPage = () => {
                 className="min-h-[80px]"
               />
             </div>
-            <div className="flex items-center justify-between gap-3">
-              <label className="flex items-center gap-2 text-xs text-foreground">
-                <input
-                  type="checkbox"
-                  className="accent-accent"
-                  checked={editingEventAllDay}
-                  onChange={(e) => setEditingEventAllDay(e.target.checked)}
-                />
-                All day
-              </label>
-              <div className="flex items-center gap-2">
-                <div className="space-y-1">
-                  <label className="text-[10px] text-muted-foreground">Start</label>
-                  <Input
-                    type="datetime-local"
-                    value={editingEventStart}
-                    onChange={(e) => setEditingEventStart(e.target.value)}
-                    disabled={editingEventAllDay}
-                    className="h-9 w-[170px]"
-                  />
+            <label className="flex items-center gap-2 text-xs text-foreground">
+              <input
+                type="checkbox"
+                className="accent-accent"
+                checked={editingEventAllDay}
+                onChange={(e) => setEditingEventAllDay(e.target.checked)}
+              />
+              All day
+            </label>
+
+            {!editingEventAllDay ? (
+              <div className="rounded-lg border border-border/50 bg-muted/30 p-3 space-y-3">
+                <p className="text-[11px] font-medium text-foreground">Start</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-muted-foreground">Date</label>
+                    <Input
+                      type="date"
+                      value={editingStartDate}
+                      onChange={(e) => {
+                        const d = e.target.value;
+                        setEditingStartDate(d);
+                        const { endDate, endTime } = defaultEndOneHourAfterStart(d, editingStartTime, zone);
+                        setEditingEndDate(endDate);
+                        setEditingEndTime(endTime);
+                      }}
+                      className="h-10"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-muted-foreground">Time</label>
+                    <Input
+                      type="time"
+                      step={900}
+                      value={editingStartTime}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setEditingStartTime(v);
+                        const { endDate, endTime } = defaultEndOneHourAfterStart(editingStartDate, v, zone);
+                        setEditingEndDate(endDate);
+                        setEditingEndTime(endTime);
+                      }}
+                      className="h-10"
+                    />
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] text-muted-foreground">End</label>
-                  <Input
-                    type="datetime-local"
-                    value={editingEventEnd}
-                    onChange={(e) => setEditingEventEnd(e.target.value)}
-                    disabled={editingEventAllDay}
-                    className="h-9 w-[170px]"
-                  />
+                <p className="text-[11px] font-medium text-foreground">End</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-muted-foreground">Date</label>
+                    <Input
+                      type="date"
+                      value={editingEndDate}
+                      onChange={(e) => setEditingEndDate(e.target.value)}
+                      className="h-10"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-muted-foreground">Time</label>
+                    <Input
+                      type="time"
+                      step={900}
+                      value={editingEndTime}
+                      onChange={(e) => setEditingEndTime(e.target.value)}
+                      className="h-10"
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-foreground">Date (all day)</label>
+                <Input
+                  type="date"
+                  value={editingStartDate}
+                  onChange={(e) => {
+                    setEditingStartDate(e.target.value);
+                    setEditingEndDate(e.target.value);
+                  }}
+                  className="h-10 max-w-[220px]"
+                />
+              </div>
+            )}
           </div>
           <DialogFooter className="justify-between">
             <Button
@@ -1020,20 +1330,28 @@ const CalendarPage = () => {
                   if (!token || !editingEvent) return;
                   setSavingEvent(true);
                   try {
-                    const toPgTimestamp = (v: string) =>
-                      v && v.includes('T') ? v.replace('T', ' ') + ':00' : v || null;
-                    const updated = await apiJson<DbEvent>(`/api/me/calendar-events/${editingEvent.event_id}`, {
+                    const allDayDate =
+                      (editingStartDate && editingStartDate.length >= 10 ? editingStartDate : null) ||
+                      parseApiTimestamp(editingEvent.start_datetime, zone)?.toFormat('yyyy-MM-dd') ||
+                      dateStr;
+                    const startSql = editingEventAllDay
+                      ? `${allDayDate} 00:00:00`
+                      : combineDateAndTimeForApi(editingStartDate, editingStartTime, zone);
+                    const endSql = editingEventAllDay
+                      ? `${allDayDate} 23:59:59`
+                      : combineDateAndTimeForApi(editingEndDate, editingEndTime, zone);
+                    await apiJson<DbEvent>(`/api/me/calendar-events/${editingEvent.event_id}`, {
                       method: 'PUT',
                       token,
                       body: JSON.stringify({
                         title: editingEventTitle || null,
                         description: editingEventDescription || null,
-                        start_datetime: editingEventAllDay ? `${dateStr} 00:00:00` : toPgTimestamp(editingEventStart),
-                        end_datetime: editingEventAllDay ? `${dateStr} 23:59:59` : toPgTimestamp(editingEventEnd),
+                        start_datetime: startSql || null,
+                        end_datetime: endSql || null,
                         is_all_day: editingEventAllDay,
                       }),
                     });
-                    setEvents((prev) => prev.map((e) => (e.event_id === updated.event_id ? updated : e)));
+                    await reloadCalendarEvents();
                     setEditingEvent(null);
                   } finally {
                     setSavingEvent(false);

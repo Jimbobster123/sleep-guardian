@@ -11,7 +11,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useApp } from "@/contexts/AppContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { LogOut, Zap, Sun, Moon } from "lucide-react";
-import { LogOut } from "lucide-react";
 import { TIMEZONE_OPTIONS } from "@/lib/timezones";
 
 export default function Profile() {

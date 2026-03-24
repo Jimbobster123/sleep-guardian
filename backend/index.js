@@ -37,6 +37,16 @@ app.use(
 );
 app.use(express.json());
 
+// Avoid confusion: this process is the API. The React app runs on Vite (default :8080).
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Luna API',
+    message: 'Use paths under /api/*. The web UI is served separately (see README).',
+    openApp: 'http://localhost:8080/',
+    examples: ['/api/health', '/api/db-health'],
+  });
+});
+
 // Health check route
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Luna API is running' });
