@@ -519,7 +519,9 @@ export async function getCalendarEvents(userId, { from, to } = {}) {
        ce.source,
        ce.external_uid,
        ce.is_all_day,
-       t.due_datetime AS task_due_datetime
+       t.due_datetime AS task_due_datetime,
+       t.status AS task_status,
+       t.priority AS task_priority
      FROM "CalendarEvent" ce
      LEFT JOIN "Task" t ON t.task_id = ce.task_id
      WHERE ${where.join(' AND ')}

@@ -4,6 +4,7 @@ import EmotionalCheckIn from '@/components/EmotionalCheckIn';
 import { useApp } from '@/contexts/AppContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
+import { isTaskPastDue } from '@/lib/taskOverdue';
 import { Moon, Flame, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
@@ -185,9 +186,11 @@ const Home = () => {
                 title={task.title}
                 subtitle={task.notes}
                 category={task.category}
+                priority={task.priority}
                 duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
                 dueDate={formatDate(task.due_datetime)}
                 completed={task.status === 'completed'}
+                pastDue={isTaskPastDue(task.status, task.due_datetime)}
                 completing={updatingTaskId === task.task_id}
                 onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
               />
@@ -220,9 +223,11 @@ const Home = () => {
                 title={task.title}
                 subtitle={task.notes}
                 category={task.category}
+                priority={task.priority}
                 duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
                 dueDate={formatDate(task.due_datetime)}
                 completed={task.status === 'completed'}
+                pastDue={isTaskPastDue(task.status, task.due_datetime)}
                 completing={updatingTaskId === task.task_id}
                 onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
               />
