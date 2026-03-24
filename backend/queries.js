@@ -7,6 +7,10 @@ function asNullIfEmpty(v) {
   return s.length === 0 ? null : v;
 }
 
+function isMissingColumnError(err, columnName) {
+  return err instanceof Error && err.message?.includes(columnName) && err.message?.includes('does not exist');
+}
+
 // Get all tasks for a user
 export async function getUserTasks(userId) {
   try {
@@ -55,43 +59,70 @@ export async function createTask(userId, task) {
   const estMinutes = Number.isFinite(estimated_minutes) ? estimated_minutes : 0;
   const safeStatus = typeof status === 'string' && status.trim().length > 0 ? status : 'pending';
 
-  try {
+  const values = [
+    userId,
+    title.trim(),
+    asNullIfEmpty(notes),
+    prio,
+    safeStatus,
+    planned_datetime || null,
+    estMinutes,
+    due_datetime || null,
+    asNullIfEmpty(category),
+  ];
+
+  const runInsert = async ({ includePlannedDateTime = true, includeCategory = true } = {}) => {
+    const columns = ['user_id', 'title', 'notes', 'priority', 'status'];
+    const params = [values[0], values[1], values[2], values[3], values[4]];
+
+    if (includePlannedDateTime) {
+      columns.push('planned_datetime');
+      params.push(values[5]);
+    }
+
+    columns.push('estimated_minutes', 'due_datetime');
+    params.push(values[6], values[7]);
+
+    if (includeCategory) {
+      columns.push('category');
+      params.push(values[8]);
+    }
+
+    const placeholders = params.map((_, index) => `$${index + 1}`).join(', ');
     const result = await pool.query(
-      `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime, category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO "Task" (${columns.join(', ')})
+       VALUES (${placeholders})
        RETURNING *`,
-      [
-        userId,
-        title.trim(),
-        asNullIfEmpty(notes),
-        prio,
-        safeStatus,
-        planned_datetime || null,
-        estMinutes,
-        due_datetime || null,
-        asNullIfEmpty(category),
-      ]
+      params
     );
     return result.rows[0];
+  };
+
+  try {
+    return await runInsert();
   } catch (err) {
-    if (err instanceof Error && err.message?.includes('category') && err.message?.includes('does not exist')) {
-      const result = await pool.query(
-        `INSERT INTO "Task" (user_id, title, notes, priority, status, planned_datetime, estimated_minutes, due_datetime)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING *`,
-        [
-          userId,
-          title.trim(),
-          asNullIfEmpty(notes),
-          prio,
-          safeStatus,
-          planned_datetime || null,
-          estMinutes,
-          due_datetime || null,
-        ]
-      );
-      return result.rows[0];
+    if (isMissingColumnError(err, 'category')) {
+      try {
+        return await runInsert({ includeCategory: false });
+      } catch (retryErr) {
+        if (isMissingColumnError(retryErr, 'planned_datetime')) {
+          return await runInsert({ includePlannedDateTime: false, includeCategory: false });
+        }
+        throw retryErr;
+      }
     }
+
+    if (isMissingColumnError(err, 'planned_datetime')) {
+      try {
+        return await runInsert({ includePlannedDateTime: false });
+      } catch (retryErr) {
+        if (isMissingColumnError(retryErr, 'category')) {
+          return await runInsert({ includePlannedDateTime: false, includeCategory: false });
+        }
+        throw retryErr;
+      }
+    }
+
     throw err;
   }
 }
@@ -207,52 +238,105 @@ export async function getUserById(userId) {
 // Update task
 export async function updateTask(taskId, updates) {
   const { title, notes, priority, status, estimated_minutes, planned_datetime, due_datetime, category } = updates || {};
-  const params = [
+  const values = {
     title,
-    notes ?? null,
-    priority ?? 3,
-    status ?? 'pending',
-    Number.isFinite(estimated_minutes) ? estimated_minutes : 0,
-    planned_datetime || null,
-    due_datetime || null,
-    category ?? null,
-    taskId,
-  ];
+    notes: notes ?? null,
+    priority: priority ?? 3,
+    status: status ?? 'pending',
+    estimated_minutes: Number.isFinite(estimated_minutes) ? estimated_minutes : 0,
+    planned_datetime: planned_datetime || null,
+    due_datetime: due_datetime || null,
+    category: category ?? null,
+  };
 
-  try {
+  const runUpdate = async ({ includePlannedDateTime = true, includeCategory = true } = {}) => {
+    const assignments = [
+      'title = $1',
+      'notes = $2',
+      'priority = $3',
+      'status = $4',
+      'estimated_minutes = $5',
+    ];
+    const params = [
+      values.title,
+      values.notes,
+      values.priority,
+      values.status,
+      values.estimated_minutes,
+    ];
+
+    if (includePlannedDateTime) {
+      assignments.push(`planned_datetime = $${params.length + 1}`);
+      params.push(values.planned_datetime);
+    }
+
+    assignments.push(`due_datetime = $${params.length + 1}`);
+    params.push(values.due_datetime);
+
+    if (includeCategory) {
+      assignments.push(`category = $${params.length + 1}`);
+      params.push(values.category);
+    }
+
+    params.push(taskId);
+
     const result = await pool.query(
-      `UPDATE "Task" 
-       SET title = $1,
-           notes = $2,
-           priority = $3,
-           status = $4,
-           estimated_minutes = $5,
-           planned_datetime = $6,
-           due_datetime = $7,
-           category = $8
-       WHERE task_id = $9 
+      `UPDATE "Task"
+       SET ${assignments.join(', ')}
+       WHERE task_id = $${params.length}
        RETURNING *`,
       params
     );
     return result.rows[0];
+  };
+
+  try {
+    return await runUpdate();
   } catch (err) {
-    if (err instanceof Error && err.message?.includes('category') && err.message?.includes('does not exist')) {
-      const result = await pool.query(
-        `UPDATE "Task" 
-         SET title = $1,
-             notes = $2,
-             priority = $3,
-             status = $4,
-             estimated_minutes = $5,
-             planned_datetime = $6,
-             due_datetime = $7
-         WHERE task_id = $8 
-         RETURNING *`,
-        [params[0], params[1], params[2], params[3], params[4], params[5], params[6], taskId]
-      );
-      return result.rows[0];
+    if (isMissingColumnError(err, 'category')) {
+      try {
+        return await runUpdate({ includeCategory: false });
+      } catch (retryErr) {
+        if (isMissingColumnError(retryErr, 'planned_datetime')) {
+          return await runUpdate({ includePlannedDateTime: false, includeCategory: false });
+        }
+        console.error('Error updating task:', retryErr);
+        throw retryErr;
+      }
+    }
+
+    if (isMissingColumnError(err, 'planned_datetime')) {
+      try {
+        return await runUpdate({ includePlannedDateTime: false });
+      } catch (retryErr) {
+        if (isMissingColumnError(retryErr, 'category')) {
+          return await runUpdate({ includePlannedDateTime: false, includeCategory: false });
+        }
+        console.error('Error updating task:', retryErr);
+        throw retryErr;
+      }
     }
     console.error('Error updating task:', err);
+    throw err;
+  }
+}
+
+export async function updateTaskStatus(taskId, userId, status) {
+  const normalizedStatus = typeof status === 'string' && status.trim()
+    ? status.trim().toLowerCase()
+    : 'pending';
+
+  try {
+    const result = await pool.query(
+      `UPDATE "Task"
+       SET status = $3
+       WHERE task_id = $1 AND user_id = $2
+       RETURNING *`,
+      [taskId, userId, normalizedStatus]
+    );
+    return result.rows[0];
+  } catch (err) {
+    console.error('Error updating task status:', err);
     throw err;
   }
 }
