@@ -7,6 +7,7 @@ import { apiJson } from '@/lib/api';
 import { Moon, Flame, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
+import { toast } from '@/components/ui/sonner';
 
 interface Task {
   task_id?: string;
@@ -26,6 +27,7 @@ const Home = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [taskError, setTaskError] = useState<string | null>(null);
+  const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -74,6 +76,42 @@ const Home = () => {
       task.status !== 'completed' &&
       isToday(task.due_datetime),
   );
+
+  const handleTaskCompletion = async (taskId: string | undefined, checked: boolean) => {
+    if (!token || !taskId) return;
+
+    const nextStatus = checked ? 'completed' : 'pending';
+    const previousTasks = tasks;
+
+    setUpdatingTaskId(taskId);
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.task_id === taskId ? { ...task, status: nextStatus } : task,
+      ),
+    );
+
+    try {
+      const updated = await apiJson<Task>(`/api/me/tasks/${taskId}/status`, {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify({ status: nextStatus }),
+      });
+
+      setTasks((prev) =>
+        prev.map((task) => (task.task_id === taskId ? updated : task)),
+      );
+
+      if (checked) {
+        toast.success('Task marked completed');
+      }
+    } catch (err) {
+      setTasks(previousTasks);
+      console.error('Error updating task status:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to update task status');
+    } finally {
+      setUpdatingTaskId(null);
+    }
+  };
 
   return (
     <div>
@@ -143,12 +181,15 @@ const Home = () => {
             homepageTasks.map((task) => (
               <TaskItem
                 key={task.task_id}
+                taskId={task.task_id}
                 title={task.title}
                 subtitle={task.notes}
                 category={task.category}
                 duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
                 dueDate={formatDate(task.due_datetime)}
                 completed={task.status === 'completed'}
+                completing={updatingTaskId === task.task_id}
+                onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
               />
             ))
           )}
@@ -175,12 +216,15 @@ const Home = () => {
             todayTasks.map((task) => (
               <TaskItem
                 key={task.task_id}
+                taskId={task.task_id}
                 title={task.title}
                 subtitle={task.notes}
                 category={task.category}
                 duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
                 dueDate={formatDate(task.due_datetime)}
                 completed={task.status === 'completed'}
+                completing={updatingTaskId === task.task_id}
+                onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
               />
             ))
           )}
