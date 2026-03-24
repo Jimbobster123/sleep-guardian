@@ -3,7 +3,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const { Pool } = pkg;
+const { Pool, types } = pkg;
+
+// TIMESTAMP WITHOUT TIME ZONE: return the value as text from Postgres instead of a JS Date.
+// Otherwise JSON.stringify turns it into an ISO UTC string and the client mis-reads wall times.
+types.setTypeParser(1114, (val) => val);
 
 const pool = new Pool({
   user: process.env.DB_USER,

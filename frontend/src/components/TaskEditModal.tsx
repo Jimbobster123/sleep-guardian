@@ -3,6 +3,9 @@ import { ApiError } from '@/lib/api';
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { useAuth } from '@/contexts/AuthContext';
+import { effectiveTimeZone, parseApiTimestamp } from '@/lib/calendarTime';
+import { DateTime } from 'luxon';
 
 interface Task {
   task_id?: string;
@@ -46,6 +49,8 @@ interface TaskEditModalProps {
 }
 
 const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskEditModalProps) => {
+  const { user } = useAuth();
+  const zone = effectiveTimeZone(user?.timezone);
   const [formData, setFormData] = useState<Task>(task);
   const [showAdditional, setShowAdditional] = useState<boolean>(() =>
     Boolean(task.planned_datetime || (task.estimated_minutes && task.estimated_minutes > 0))
@@ -117,46 +122,37 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
     }
   };
 
-  const toLocalInputValue = (value?: string) => {
-    if (!value) return '';
-    if (value.length === 16 && value.includes('T')) return value;
-    const d = parseDateLike(value);
-    if (!d) return '';
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
-    return `${year}-${month}-${day}T${hours}:${minutes}`;
-  };
-
   const toDateValue = (value?: string) => {
-    if (!value) return '';
-    const v = toLocalInputValue(value);
-    return v ? v.slice(0, 10) : '';
+    const dt = parseApiTimestamp(value, zone);
+    return dt ? dt.toFormat('yyyy-MM-dd') : '';
   };
   const toTimeValue = (value?: string) => {
-    if (!value) return '';
-    const v = toLocalInputValue(value);
-    return v ? v.slice(11, 16) : '';
+    const dt = parseApiTimestamp(value, zone);
+    return dt ? dt.toFormat('HH:mm') : '';
   };
   const setDueFromDateAndTime = (date: string, time: string) => {
     if (!date && !time) {
       handleChange('due_datetime', undefined);
       return;
     }
-    const d = date || localDateString();
+    const d = date || DateTime.now().setZone(zone).toFormat('yyyy-MM-dd');
     const t = time || '00:00';
-    handleChange('due_datetime', `${d}T${t}`);
+    const [hh, mm] = t.split(':').map((x) => parseInt(x, 10));
+    const [y, mo, da] = d.split('-').map((x) => parseInt(x, 10));
+    const dt = DateTime.fromObject({ year: y, month: mo, day: da, hour: hh || 0, minute: mm || 0, second: 0 }, { zone });
+    handleChange('due_datetime', dt.isValid ? dt.toFormat('yyyy-MM-dd HH:mm:ss') : undefined);
   };
   const setPlannedFromDateAndTime = (date: string, time: string) => {
     if (!date && !time) {
       handleChange('planned_datetime', undefined);
       return;
     }
-    const d = date || localDateString();
+    const d = date || DateTime.now().setZone(zone).toFormat('yyyy-MM-dd');
     const t = time || '00:00';
-    handleChange('planned_datetime', `${d}T${t}`);
+    const [hh, mm] = t.split(':').map((x) => parseInt(x, 10));
+    const [y, mo, da] = d.split('-').map((x) => parseInt(x, 10));
+    const dt = DateTime.fromObject({ year: y, month: mo, day: da, hour: hh || 0, minute: mm || 0, second: 0 }, { zone });
+    handleChange('planned_datetime', dt.isValid ? dt.toFormat('yyyy-MM-dd HH:mm:ss') : undefined);
   };
 
   return createPortal(
@@ -239,6 +235,7 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                 />
                 <input
                   type="time"
+                  step={900}
                   value={toTimeValue(formData.due_datetime)}
                   onChange={(e) => setDueFromDateAndTime(toDateValue(formData.due_datetime), e.target.value)}
                   className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
@@ -285,13 +282,15 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                     />
                     <input
                       type="time"
+                      step={900}
                       value={toTimeValue(formData.planned_datetime)}
                       onChange={(e) => setPlannedFromDateAndTime(toDateValue(formData.planned_datetime), e.target.value)}
                       className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
                     />
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    When you plan to work on this. Adds to your calendar.
+                    When you plan to work on this. Adds to your calendar. Times use your profile timezone
+                    {zone ? ` (${zone})` : ''}.
                   </p>
                 </div>
 
