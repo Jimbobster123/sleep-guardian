@@ -207,6 +207,7 @@ sleep-guardian/
 - When a user views an event, the system shall display all event information.
 - When a user creates an account, the system will store that information.
 - When a user enters a correct username and password, they will be able to see their store information.
+- When a user presses the "suggest shifts" button, the system shall suggest schedule shifts to accomodate sleep goals.
 #### State-Driven Requirements:
 - While the time is within the designated sleep time, the system shall inform the user that it is within this time.
 
@@ -231,3 +232,4 @@ sleep-guardian/
 - Schedule conflict suggestions
 - Profile page
 - Events that conflict with bed time show warning
+- Schedule-shifting-to-fit-sleep-goals feature
