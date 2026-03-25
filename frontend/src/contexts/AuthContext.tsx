@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { apiJson } from "@/lib/api";
+import { ApiError, apiJson } from "@/lib/api";
 
 export type User = {
   user_id: string;
@@ -64,9 +64,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         if (token) await refreshMe();
-      } catch {
-        setSession(null);
-        setUser(null);
+      } catch (err) {
+        // Only clear the session on an actual auth failure.
+        // For transient API/DB errors, keep the token so RequireAuth can retry.
+        if (err instanceof ApiError && err.status === 401) {
+          setSession(null);
+          setUser(null);
+        } else {
+          setUser(null);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }

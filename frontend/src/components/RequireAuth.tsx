@@ -23,17 +23,37 @@ export default function RequireAuth({
   children: React.ReactNode;
   requireSleepSetup?: boolean;
 }) {
-  const { token, user, loading } = useAuth();
+  const { token, user, loading, refreshMe } = useAuth();
   const nav = useNavigate();
   const loc = useLocation();
   const [checkedSleep, setCheckedSleep] = useState(false);
+  const [sessionRefreshAttempted, setSessionRefreshAttempted] = useState(false);
+
+  useEffect(() => {
+    setSessionRefreshAttempted(false);
+  }, [token]);
 
   useEffect(() => {
     if (loading) return;
-    if (!token || !user) {
+    // If there's no token, the session is definitely invalid.
+    if (!token) {
       nav("/login", { replace: true, state: { from: loc.pathname } });
       return;
     }
+    // Token exists but `user` hasn't been loaded yet (or refresh failed).
+    // Try refreshing the user once before redirecting.
+    if (!user) {
+      if (sessionRefreshAttempted) {
+        nav("/login", { replace: true, state: { from: loc.pathname } });
+        return;
+      }
+      setSessionRefreshAttempted(true);
+      void refreshMe().catch(() => {
+        nav("/login", { replace: true, state: { from: loc.pathname } });
+      });
+      return;
+    }
+    setSessionRefreshAttempted(false);
     if (!requireSleepSetup) {
       setCheckedSleep(true);
       return;
@@ -59,10 +79,11 @@ export default function RequireAuth({
     return () => {
       cancelled = true;
     };
-  }, [loading, token, user, nav, loc.pathname, requireSleepSetup]);
+  }, [loading, token, user, nav, loc.pathname, requireSleepSetup, refreshMe, sessionRefreshAttempted]);
 
   if (loading) return <AuthLoadingShell detail="Checking your session…" />;
-  if (!token || !user) return <AuthLoadingShell detail="Redirecting to sign in…" />;
+  if (!token) return <AuthLoadingShell detail="Redirecting to sign in…" />;
+  if (!user) return <AuthLoadingShell detail="Checking your session…" />;
   if (requireSleepSetup && !checkedSleep) return <AuthLoadingShell detail="Loading your sleep goal…" />;
   return <>{children}</>;
 }

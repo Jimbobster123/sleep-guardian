@@ -14,7 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { format, addDays, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, eachDayOfInterval, isSameDay, isSameMonth, isToday } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiJson } from '@/lib/api';
+import { ApiError, apiJson } from '@/lib/api';
 import { isTaskPastDue } from '@/lib/taskOverdue';
 import PriorityIndicator from '@/components/PriorityIndicator';
 import {
@@ -104,6 +104,12 @@ type ScheduleSuggestions = {
     suggested_start_datetime: string | null;
     suggested_end_datetime: string | null;
   }>;
+  date?: string;
+  goal_type?: string;
+  preferred_sleep_window?: { start: string; end: string };
+  sleep_window?: { start: string; end: string };
+  moved_sleep_window?: boolean;
+  warning?: string;
 };
 
 type Task = {
@@ -158,6 +164,21 @@ const CalendarPage = () => {
   const [createRepeatUntil, setCreateRepeatUntil] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [sleepWindowConflict, setSleepWindowConflict] = useState<{
+    open: boolean;
+    title: string;
+    start_datetime: string;
+    end_datetime: string;
+    event_date: string;
+    repeat: string;
+    repeat_count: number;
+    repeat_until: string | null;
+    is_all_day: boolean;
+    conflictCode: string | null;
+    message: string;
+    description: string;
+  } | null>(null);
+  const [sleepWindowConflictError, setSleepWindowConflictError] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingEvent, setEditingEvent] = useState<DbEvent | null>(null);
   const [editingEventTitle, setEditingEventTitle] = useState('');
@@ -169,6 +190,7 @@ const CalendarPage = () => {
   const [editingEventAllDay, setEditingEventAllDay] = useState(false);
   const [editingEventScope, setEditingEventScope] = useState<'single' | 'series'>('single');
   const [savingEvent, setSavingEvent] = useState(false);
+  const [editingEventError, setEditingEventError] = useState<string | null>(null);
 
   const dateStr = useMemo(() => format(day, 'yyyy-MM-dd'), [day]);
 
@@ -251,6 +273,27 @@ const CalendarPage = () => {
       source: 'saved' as const,
     };
   }, [windowForDay, sleep, suggestions]);
+
+  // For overnight sleep windows (bedtime > wake time), early-morning hours
+  // on the current calendar day belong to the previous day's "bedtime episode".
+  // Backend scheduling also treats those hours as belonging to the previous day.
+  const prevWindowForDay = useMemo(() => {
+    const prevDow = (dow + 6) % 7;
+    const w = (sleep?.windows || []).find((x) => x.day_of_week === prevDow);
+    return w || null;
+  }, [sleep, dow]);
+
+  const wakeHourPrev = useMemo(() => {
+    const wake = String(prevWindowForDay?.end_time || sleep?.goal?.target_wake_time || '07:00:00').slice(0, 5);
+    const [wh, wm] = wake.split(':').map(Number);
+    return (wh || 0) + (wm || 0) / 60;
+  }, [prevWindowForDay, sleep?.goal?.target_wake_time]);
+
+  const bedHourPrev = useMemo(() => {
+    const bed = String(prevWindowForDay?.start_time || sleep?.goal?.target_bedtime || '23:00:00').slice(0, 5);
+    const [bh, bm] = bed.split(':').map(Number);
+    return (bh || 0) + (bm || 0) / 60;
+  }, [prevWindowForDay, sleep?.goal?.target_bedtime]);
 
   const getEventStyle = (source?: string | null) => {
     if (source === 'task_planned') return 'bg-accent/15 border border-accent/30 text-foreground';
@@ -412,6 +455,16 @@ const CalendarPage = () => {
     );
     setEvents(evRes);
   }, [token, fetchRange.from, fetchRange.to]);
+
+  const reloadSleepGoal = useCallback(async () => {
+    if (!token) return;
+    const goalRes = await apiJson<SleepGoalResponse>('/api/me/sleep-goal', { token });
+    setSleep(goalRes);
+  }, [token]);
+
+  const reloadSleepAndEvents = useCallback(async () => {
+    await Promise.all([reloadSleepGoal(), reloadCalendarEvents()]);
+  }, [reloadSleepGoal, reloadCalendarEvents]);
 
   const persistEventTimeMove = useCallback(
     async (ev: DayViewEvent, newStart: Date, newEnd: Date) => {
@@ -684,6 +737,15 @@ const CalendarPage = () => {
                 body: JSON.stringify({ date: dateStr }),
               });
               setSuggestions(res);
+
+              // Apply the suggested sleep window so the protected purple zones move.
+              await apiJson('/api/me/sleep-window/apply-suggestion', {
+                method: 'POST',
+                token,
+                body: JSON.stringify({ date: dateStr }),
+              });
+
+              await reloadSleepAndEvents();
             }}
             className="text-xs font-medium text-accent flex items-center gap-1"
           >
@@ -861,29 +923,29 @@ const CalendarPage = () => {
                       if (!token) return;
                       setCreating(true);
                       setCreateError(null);
+                      const title = createTitle.trim();
+                      const start = createAllDay
+                        ? `${createEventDate} 00:00:00`
+                        : combineDateAndTimeForApi(createEventDate, createStartTime, zone);
+                      const end = createAllDay ? `${createEventDate} 23:59:59` : combineDateAndTimeForApi(createEndDate, createEndTime, zone);
+                      const payload = {
+                        title: title.length ? title : null,
+                        description: createDescription.trim().length ? createDescription.trim() : null,
+                        start_datetime: start,
+                        end_datetime: end,
+                        is_all_day: createAllDay,
+                        source: 'manual',
+                        status: 'scheduled',
+                        repeat: createRepeat,
+                        repeat_count: createRepeatCount,
+                        repeat_until: createRepeatUntil || null,
+                      };
+
                       try {
-                        const title = createTitle.trim();
-                        const start = createAllDay
-                          ? `${createEventDate} 00:00:00`
-                          : combineDateAndTimeForApi(createEventDate, createStartTime, zone);
-                        const end = createAllDay
-                          ? `${createEventDate} 23:59:59`
-                          : combineDateAndTimeForApi(createEndDate, createEndTime, zone);
                         const created = await apiJson<DbEvent | { events: DbEvent[] }>('/api/me/calendar-events', {
                           method: 'POST',
                           token,
-                          body: JSON.stringify({
-                            title: title.length ? title : null,
-                            description: createDescription.trim().length ? createDescription.trim() : null,
-                            start_datetime: start,
-                            end_datetime: end,
-                            is_all_day: createAllDay,
-                            source: 'manual',
-                            status: 'scheduled',
-                            repeat: createRepeat,
-                            repeat_count: createRepeatCount,
-                            repeat_until: createRepeatUntil || null,
-                          }),
+                          body: JSON.stringify(payload),
                         });
                         if ('events' in created && Array.isArray(created.events)) {
                           setEvents((prev) => [...prev, ...created.events]);
@@ -901,6 +963,26 @@ const CalendarPage = () => {
                         setCreateRepeatCount(5);
                         setCreateRepeatUntil('');
                       } catch (err) {
+                        if (err instanceof ApiError && err.status === 409 && err.details && typeof err.details === 'object') {
+                          const details = err.details as { code?: string } | null;
+                          const code = details?.code ? String(details.code) : null;
+                          setSleepWindowConflict({
+                            open: true,
+                            title,
+                            start_datetime: start,
+                            end_datetime: end,
+                            event_date: createEventDate,
+                            repeat: createRepeat,
+                            repeat_count: createRepeatCount,
+                            repeat_until: createRepeatUntil || null,
+                            is_all_day: createAllDay,
+                            conflictCode: code,
+                            message: err.message,
+                            description: createDescription,
+                          });
+                          setSleepWindowConflictError(null);
+                          return;
+                        }
                         setCreateError(err instanceof Error ? err.message : 'Failed to create event');
                       } finally {
                         setCreating(false);
@@ -912,6 +994,150 @@ const CalendarPage = () => {
                   </Button>
                 </DialogFooter>
               </DialogContent>
+        </Dialog>
+
+        {/* Sleep-window conflict resolution dialog (after submit) */}
+        <Dialog
+          open={Boolean(sleepWindowConflict?.open)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setSleepWindowConflict(null);
+              setSleepWindowConflictError(null);
+            }
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Event falls in your sleep window</DialogTitle>
+              <DialogDescription>
+                {sleepWindowConflict?.message || 'This event overlaps your sleep window.'}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">{sleepWindowConflict?.title || 'Event'}</span>
+                {sleepWindowConflict ? (
+                  <>
+                    {' '}
+                    • {fmtPgLocal(sleepWindowConflict.start_datetime, zone)} – {fmtPgLocal(sleepWindowConflict.end_datetime, zone)}
+                  </>
+                ) : null}
+              </p>
+              {sleepWindowConflictError ? (
+                <p className="text-sm text-destructive">{sleepWindowConflictError}</p>
+              ) : null}
+            </div>
+
+            <DialogFooter className="flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={async () => {
+                  if (!token || !sleepWindowConflict) return;
+                  setSleepWindowConflictError(null);
+                  const payload = {
+                    title: sleepWindowConflict.title.trim().length ? sleepWindowConflict.title.trim() : null,
+                    description: sleepWindowConflict.description.trim().length ? sleepWindowConflict.description.trim() : null,
+                    start_datetime: sleepWindowConflict.start_datetime,
+                    end_datetime: sleepWindowConflict.end_datetime,
+                    is_all_day: sleepWindowConflict.is_all_day,
+                    source: 'manual',
+                    status: 'scheduled',
+                    repeat: sleepWindowConflict.repeat,
+                    repeat_count: sleepWindowConflict.repeat_count,
+                    repeat_until: sleepWindowConflict.repeat_until,
+                    ignore_sleep_validation: true,
+                  };
+
+                  await apiJson('/api/me/calendar-events', {
+                    method: 'POST',
+                    token,
+                    body: JSON.stringify(payload),
+                  });
+
+                  await reloadCalendarEvents();
+
+                  setSleepWindowConflict(null);
+                  setCreateOpen(false);
+                  setCreateTitle('');
+                  setCreateDescription('');
+                  setCreateStartTime('09:00');
+                  setCreateEndDate(dateStr);
+                  setCreateEndTime('10:00');
+                  setCreateAllDay(false);
+                  setCreateRepeat('none');
+                  setCreateRepeatCount(5);
+                  setCreateRepeatUntil('');
+                }}
+              >
+                Keep in this time
+              </Button>
+
+              <Button
+                type="button"
+                variant="outline"
+                className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                onClick={() => {
+                  setSleepWindowConflict(null);
+                  setSleepWindowConflictError(null);
+                  setCreateOpen(false);
+                }}
+              >
+                Delete
+              </Button>
+
+              <Button
+                type="button"
+                onClick={async () => {
+                  if (!token || !sleepWindowConflict) return;
+                  setSleepWindowConflictError(null);
+                  try {
+                    await apiJson('/api/me/sleep-window/apply-suggestion', {
+                      method: 'POST',
+                      token,
+                      body: JSON.stringify({
+                        date: sleepWindowConflict.event_date,
+                        proposed_event: {
+                          start_datetime: sleepWindowConflict.start_datetime,
+                          end_datetime: sleepWindowConflict.end_datetime,
+                        },
+                      }),
+                    });
+
+                    // Clear preview suggestions so the UI uses the updated saved sleep window.
+                    setSuggestions(null);
+                    await reloadSleepAndEvents();
+
+                    await apiJson('/api/me/calendar-events', {
+                      method: 'POST',
+                      token,
+                      body: JSON.stringify({
+                        title: sleepWindowConflict.title.trim().length ? sleepWindowConflict.title.trim() : null,
+                        description: sleepWindowConflict.description.trim().length ? sleepWindowConflict.description.trim() : null,
+                        start_datetime: sleepWindowConflict.start_datetime,
+                        end_datetime: sleepWindowConflict.end_datetime,
+                        is_all_day: sleepWindowConflict.is_all_day,
+                        source: 'manual',
+                        status: 'scheduled',
+                        repeat: sleepWindowConflict.repeat,
+                        repeat_count: sleepWindowConflict.repeat_count,
+                        repeat_until: sleepWindowConflict.repeat_until,
+                      }),
+                    });
+
+                    await reloadCalendarEvents();
+                    setSleepWindowConflict(null);
+                    setCreateOpen(false);
+                  } catch (err) {
+                    setSleepWindowConflictError(err instanceof Error ? err.message : 'Failed to suggest shift');
+                  }
+                }}
+              >
+                Suggest shift
+              </Button>
+            </DialogFooter>
+          </DialogContent>
         </Dialog>
 
         {/* Suggested sleep window (day view only) */}
@@ -949,13 +1175,25 @@ const CalendarPage = () => {
               </div>
               <div ref={dayTimelineRef} className="flex-1 relative min-h-[72rem] bg-background/30">
                 {hours.map(({ hour }) => {
-                  const inSleepWindow =
-                    sleepTimes.bedHour >= sleepTimes.wakeHour
+                  const currentCrossesMidnight = sleepTimes.bedHour >= sleepTimes.wakeHour;
+
+                  // Only apply the "previous day episode" adjustment to saved sleep windows.
+                  // When using suggested sleep windows, the timestamps already include the correct episode boundaries.
+                  const isSavedMode = sleepTimes.source === 'saved';
+                  const prevCrossesMidnight = isSavedMode ? bedHourPrev >= wakeHourPrev : false;
+                  const inPrevEpisode = isSavedMode ? prevCrossesMidnight && hour < Math.floor(wakeHourPrev) : false;
+
+                  const inSleepWindow = isSavedMode
+                    ? currentCrossesMidnight
+                      ? hour >= Math.floor(sleepTimes.bedHour) || inPrevEpisode
+                      : (hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(sleepTimes.wakeHour)) || inPrevEpisode
+                    : currentCrossesMidnight
                       ? hour >= Math.floor(sleepTimes.bedHour) || hour < Math.floor(sleepTimes.wakeHour)
                       : hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(sleepTimes.wakeHour);
-                  const inWakeWindow =
-                    hour >= Math.floor(sleepTimes.wakeHour) && hour < Math.floor(sleepTimes.wakeHour) + 1;
-                  const isWakeRow = hour === Math.floor(sleepTimes.wakeHour);
+
+                  const wakeBoundaryHour = isSavedMode && prevCrossesMidnight ? wakeHourPrev : sleepTimes.wakeHour;
+                  const inWakeWindow = hour >= Math.floor(wakeBoundaryHour) && hour < Math.floor(wakeBoundaryHour) + 1;
+                  const isWakeRow = hour === Math.floor(wakeBoundaryHour);
                   const isBedRow = hour === Math.floor(sleepTimes.bedHour);
                   return (
                     <div
@@ -1110,12 +1348,21 @@ const CalendarPage = () => {
                   const dayKey = format(d, 'yyyy-MM-dd');
                   const dow = d.getDay();
                   const st = sleepTimesByDow[dow];
+                  const prevDow = (dow + 6) % 7;
+                  const prevSt = sleepTimesByDow[prevDow];
                   const bedHour = st?.bedHour ?? 23;
                   const wakeHour = st?.wakeHour ?? 7;
-                  const inSleepWindow = bedHour >= wakeHour
-                    ? hour >= Math.floor(bedHour) || hour < Math.floor(wakeHour)
-                    : hour >= Math.floor(bedHour) && hour < Math.floor(wakeHour);
-                  const inWakeWindow = hour >= Math.floor(wakeHour) && hour < Math.floor(wakeHour) + 1;
+                  const prevBedHour = prevSt?.bedHour ?? bedHour;
+                  const prevWakeHour = prevSt?.wakeHour ?? wakeHour;
+                  const currentCrossesMidnight = bedHour >= wakeHour;
+                  const prevCrossesMidnight = prevBedHour >= prevWakeHour;
+
+                  const inSleepWindow = currentCrossesMidnight
+                    ? hour >= Math.floor(bedHour) || (prevCrossesMidnight && hour < Math.floor(prevWakeHour))
+                    : (hour >= Math.floor(bedHour) && hour < Math.floor(wakeHour)) || (prevCrossesMidnight && hour < Math.floor(prevWakeHour));
+
+                  const wakeBoundaryHour = prevCrossesMidnight ? prevWakeHour : wakeHour;
+                  const inWakeWindow = hour >= Math.floor(wakeBoundaryHour) && hour < Math.floor(wakeBoundaryHour) + 1;
                   const hourStart = hour;
                   const hourEnd = hour + 1;
                   const dayEvents = (eventsForWeekDay[dayKey] || []).filter((x) => {
@@ -1313,6 +1560,7 @@ const CalendarPage = () => {
           if (!open) {
             setEditingEvent(null);
             setSavingEvent(false);
+            setEditingEventError(null);
             setEditingStartDate('');
             setEditingStartTime('');
             setEditingEndDate('');
@@ -1327,6 +1575,11 @@ const CalendarPage = () => {
               Times use your profile timezone: <span className="font-medium text-foreground">{zone}</span>.
             </DialogDescription>
           </DialogHeader>
+          {editingEventError ? (
+            <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3">
+              <p className="text-sm text-destructive">{editingEventError}</p>
+            </div>
+          ) : null}
           <div className="space-y-3">
             <div className="space-y-1">
               <label className="text-xs font-medium text-foreground">Title</label>
@@ -1447,17 +1700,17 @@ const CalendarPage = () => {
                 if (!token || !editingEvent) return;
                 setSavingEvent(true);
                 try {
+                  setEditingEventError(null);
                   const deleted = await apiJson<{ deleted_event_ids?: string[] }>(`/api/me/calendar-events/${editingEvent.event_id}?scope=${encodeURIComponent(editingEventScope)}`, {
                     method: 'DELETE',
                     token,
                   });
-                  if (Array.isArray(deleted.deleted_event_ids) && deleted.deleted_event_ids.length) {
-                    const deletedSet = new Set(deleted.deleted_event_ids);
-                    setEvents((prev) => prev.filter((e) => !deletedSet.has(e.event_id)));
-                  } else {
-                    setEvents((prev) => prev.filter((e) => e.event_id !== editingEvent.event_id));
-                  }
+                  // Reload to guarantee UI stays in sync even if recurrence scope
+                  // or ID mapping differs across day/week/month views.
+                  await reloadCalendarEvents();
                   setEditingEvent(null);
+                } catch (err) {
+                  setEditingEventError(err instanceof Error ? err.message : 'Failed to delete event');
                 } finally {
                   setSavingEvent(false);
                 }
@@ -1482,6 +1735,7 @@ const CalendarPage = () => {
                   if (!token || !editingEvent) return;
                   setSavingEvent(true);
                   try {
+                    setEditingEventError(null);
                     const allDayDate =
                       (editingStartDate && editingStartDate.length >= 10 ? editingStartDate : null) ||
                       parseApiTimestamp(editingEvent.start_datetime, zone)?.toFormat('yyyy-MM-dd') ||
@@ -1508,6 +1762,8 @@ const CalendarPage = () => {
                     );
                     await reloadCalendarEvents();
                     setEditingEvent(null);
+                  } catch (err) {
+                    setEditingEventError(err instanceof Error ? err.message : 'Failed to save event');
                   } finally {
                     setSavingEvent(false);
                   }

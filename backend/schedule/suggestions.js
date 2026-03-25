@@ -139,75 +139,162 @@ function suggestEventShifts({ sleepStart, sleepEnd, events, preferBeforeSleep })
   return conflicts;
 }
 
-export async function buildScheduleSuggestions({ userId, date }) {
+function findBestSleepWindow({
+  preferredStart,
+  durationMinutes,
+  events,
+  windDownMinutes = 15,
+  searchBeforeMinutes = 12 * 60,
+  searchAfterMinutes = 12 * 60,
+}) {
+  // Search 15-minute increments around the preferred start, keeping the same sleep duration.
+  const sortedPreferredStart = new Date(preferredStart);
+  if (Number.isNaN(sortedPreferredStart.getTime())) return null;
+
+  const occupied = [];
+  for (const ev of events) {
+    const times = safeEventTimes(ev);
+    if (!times) continue;
+    occupied.push({ start: times.start, end: times.end, event: ev });
+  }
+
+  const isFree = (start, end) => {
+    for (const o of occupied) {
+      // Wind-down is blocked too: it is the interval before bedtime.
+      // That matches the backend conflict validation.
+      const blockedStart = windDownMinutes ? addMinutes(start, -windDownMinutes) : start;
+      if (overlaps(blockedStart, end, o.start, o.end)) return false;
+    }
+    return true;
+  };
+
+  const stepMinutes = 15;
+  const from = addMinutes(sortedPreferredStart, -searchBeforeMinutes);
+  const to = addMinutes(sortedPreferredStart, searchAfterMinutes);
+
+  let best = null;
+  for (let t = new Date(from); t <= to; t = addMinutes(t, stepMinutes)) {
+    const start = t;
+    const end = addMinutes(start, durationMinutes);
+    if (!isFree(start, end)) continue;
+    const cost = Math.abs(minutesBetween(sortedPreferredStart, start));
+    if (!best || cost < best.cost) best = { start, end, cost };
+  }
+
+  return best;
+}
+
+export async function buildScheduleSuggestions({ userId, date, proposedEvent = null }) {
   const goal = await getActiveSleepGoal(userId);
   const windows = goal ? await getSleepWindows(goal.sleep_goal_id) : [];
 
   const d = new Date(`${date}T00:00:00`);
   if (Number.isNaN(d.getTime())) throw new Error('Invalid date (expected YYYY-MM-DD)');
-  const dow = d.getDay(); // 0..6
+  const dowA = d.getDay(); // 0..6
+  const dPrev = new Date(d);
+  dPrev.setDate(dPrev.getDate() - 1);
+  const dowPrev = dPrev.getDay(); // 0..6
+  const prevDateStr = `${dPrev.getFullYear()}-${pad(dPrev.getMonth() + 1)}-${pad(dPrev.getDate())}`;
 
-  const window = windows.find((w) => w.day_of_week === dow) || null;
-  const defaultStart = window?.start_time || goal?.target_bedtime || '23:00:00';
-  const defaultEnd = window?.end_time || goal?.target_wake_time || '07:00:00';
+  const windowA = windows.find((w) => w.day_of_week === dowA) || null;
+  const defaultStartA = windowA?.start_time || goal?.target_bedtime || '23:00:00';
+  const defaultEndA = windowA?.end_time || goal?.target_wake_time || '07:00:00';
 
-  const preferred = normalizeWindow(date, defaultStart, defaultEnd);
+  // When the sleep window crosses midnight (typical bedtime > wake time), early-morning
+  // hours on date `YYYY-MM-DD` belong to the previous "bedtime episode".
+  const windowPrev = windows.find((w) => w.day_of_week === dowPrev) || null;
+  const defaultStartPrev = windowPrev?.start_time || goal?.target_bedtime || '23:00:00';
+  const defaultEndPrev = windowPrev?.end_time || goal?.target_wake_time || '07:00:00';
+
+  const preferredA = normalizeWindow(date, defaultStartA, defaultEndA);
+  const preferredPrev = normalizeWindow(prevDateStr, defaultStartPrev, defaultEndPrev);
+
+  let preferred = preferredA;
+  let preferredAnchorDateStr = date;
+  if (proposedEvent?.start_datetime && proposedEvent?.end_datetime) {
+    const proposedTimes = safeEventTimes({ start_datetime: proposedEvent.start_datetime, end_datetime: proposedEvent.end_datetime });
+    if (proposedTimes && (overlaps(proposedTimes.start, proposedTimes.end, preferredPrev.start, preferredPrev.end) || overlaps(proposedTimes.start, proposedTimes.end, preferredA.start, preferredA.end))) {
+      // Pick whichever episode overlaps the proposed event (so we shift the correct "bedtime episode").
+      if (overlaps(proposedTimes.start, proposedTimes.end, preferredPrev.start, preferredPrev.end)) {
+        preferred = preferredPrev;
+        preferredAnchorDateStr = prevDateStr;
+      } else {
+        preferred = preferredA;
+        preferredAnchorDateStr = date;
+      }
+    }
+  }
+
   const preferredSleepWindow = { start: toPgTimestampLocal(preferred.start), end: toPgTimestampLocal(preferred.end) };
 
-  const from = `${date} 00:00:00`;
-  const to = toPgTimestampLocal(addMinutes(new Date(`${date}T00:00:00`), 48 * 60)); // include overnight
+  // Expand the search range so candidate shifted sleep windows (which may start on the previous day)
+  // still get collision checks against existing events.
+  const from = `${prevDateStr} 00:00:00`;
+  const to = toPgTimestampLocal(addMinutes(new Date(`${date}T00:00:00`), 72 * 60)); // 3 days
   const events = await getCalendarEvents(userId, { from, to });
+  if (proposedEvent?.start_datetime && proposedEvent?.end_datetime) {
+    events.push({
+      event_id: 'proposed',
+      title: 'proposed',
+      start_datetime: proposedEvent.start_datetime,
+      end_datetime: proposedEvent.end_datetime,
+    });
+  }
 
   const goalType = goal?.goal_type || 'fixed_bed_wake';
-  if (goalType === 'fixed_duration') {
-    const durationMinutes = Number(goal?.target_sleep_minutes || 0);
-    if (!durationMinutes) {
-      return {
-        date,
-        goal_type: goalType,
-        preferred_sleep_window: preferredSleepWindow,
-        error: 'target_sleep_minutes is required for fixed_duration',
-      };
-    }
+  const durationMinutes =
+    goalType === 'fixed_duration' ? Number(goal?.target_sleep_minutes || 0) : minutesBetween(preferred.start, preferred.end);
 
-    // Preferred start based on preferred end (wake) minus duration
-    const preferredStart = addMinutes(preferred.end, -durationMinutes);
-    const best = findDurationWindow({ preferredStart, durationMinutes, events });
-    if (!best) {
-      return {
-        date,
-        goal_type: goalType,
-        preferred_sleep_window: preferredSleepWindow,
-        sleep_window: { start: toPgTimestampLocal(preferredStart), end: toPgTimestampLocal(preferred.end) },
-        conflicts: [],
-        warning: 'No conflict-free sleep window found in search range',
-      };
-    }
+  if (!durationMinutes || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+    return {
+      date,
+      goal_type: goalType,
+      preferred_sleep_window: preferredSleepWindow,
+      sleep_window: preferredSleepWindow,
+      conflicts: [],
+      moved_sleep_window: false,
+      warning: 'Could not determine a valid sleep duration; using preferred window.',
+    };
+  }
+
+  // If fixed_duration, prefer the window that keeps the preferred end (wake) time.
+  const preferredStart = goalType === 'fixed_duration' ? addMinutes(preferred.end, -durationMinutes) : preferred.start;
+  const windDownMinutes = Math.max(15, Number(goal?.bedtime_flex_minutes || 60));
+  const best = findBestSleepWindow({ preferredStart, durationMinutes, events, windDownMinutes });
+
+  if (!best) {
+    // Fallback: keep the preferred sleep window and (optionally) suggest shifting events.
+    const preferBeforeSleep = goalType === 'fixed_bedtime' || goalType === 'fixed_bed_wake';
+    const conflicts = suggestEventShifts({
+      sleepStart: preferred.start,
+      sleepEnd: preferred.end,
+      events,
+      preferBeforeSleep,
+    });
 
     return {
       date,
       goal_type: goalType,
       preferred_sleep_window: preferredSleepWindow,
-      sleep_window: { start: toPgTimestampLocal(best.start), end: toPgTimestampLocal(best.end) },
-      conflicts: [],
-      moved_sleep_window: toPgTimestampLocal(best.start) !== preferredSleepWindow.start || toPgTimestampLocal(best.end) !== preferredSleepWindow.end,
+      sleep_window: preferredSleepWindow,
+      conflicts,
+      moved_sleep_window: false,
+      warning: 'No conflict-free sleep window found; keeping preferred sleep window.',
     };
   }
 
-  const preferBeforeSleep = goalType === 'fixed_bedtime' || goalType === 'fixed_bed_wake';
-  const conflicts = suggestEventShifts({
-    sleepStart: preferred.start,
-    sleepEnd: preferred.end,
-    events,
-    preferBeforeSleep,
-  });
+  const sleepWindow = { start: toPgTimestampLocal(best.start), end: toPgTimestampLocal(best.end) };
+  const movedSleepWindow =
+    sleepWindow.start !== preferredSleepWindow.start || sleepWindow.end !== preferredSleepWindow.end;
 
   return {
     date,
     goal_type: goalType,
     preferred_sleep_window: preferredSleepWindow,
-    sleep_window: preferredSleepWindow,
-    conflicts,
+    sleep_window: sleepWindow,
+    conflicts: [],
+    moved_sleep_window: movedSleepWindow,
+    anchor_date: preferredAnchorDateStr,
   };
 }
 
