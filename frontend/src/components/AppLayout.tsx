@@ -70,7 +70,7 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
           </div>
         )}
 
-        <main className={`${hideNav ? 'pb-0' : 'pb-6'} no-scrollbar overflow-y-auto`}>
+        <main className={`${hideNav ? 'pb-0' : 'pt-4 pb-6'} no-scrollbar overflow-y-auto`}>
           {children}
         </main>
       </div>

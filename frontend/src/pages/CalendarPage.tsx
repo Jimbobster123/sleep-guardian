@@ -588,7 +588,7 @@ const CalendarPage = () => {
     <div className="max-w-4xl mx-auto">
       <PageHeader title="Calendar" compact />
 
-      <div className="px-5 -mt-2 pb-6">
+      <div className="px-5 pb-6">
         {/* View switcher + Date picker */}
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
           <div className="flex rounded-lg border-2 border-border bg-card shadow-sm overflow-hidden flex-shrink-0">
