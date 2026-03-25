@@ -12,7 +12,7 @@ Luna is a sleep optimization and task management app that helps users protect th
 ## Setup (First Time)
 
 ### Prerequisites
-- Node.js 16+ — https://nodejs.org/
+- Node.js 18+ — https://nodejs.org/
 - PostgreSQL 12+ — https://www.postgresql.org/download/
 
 Verify both are installed:
@@ -38,12 +38,14 @@ cd ../backend && npm install
 # Create the database
 psql -U postgres -d postgres -c "CREATE DATABASE luna;"
 
-# Load schema and migrations
+# Load schema and migrations (run all files in order)
 psql -U postgres -d luna -f db/schema.sql
 psql -U postgres -d luna -f db/migrations/001_auth_calendar_sleepgoal.sql
-
-# Add columns required by the latest backend version
-psql -U postgres -d luna -c "ALTER TABLE \"User\" ADD COLUMN IF NOT EXISTS google_refresh_token TEXT; ALTER TABLE \"User\" ADD COLUMN IF NOT EXISTS google_calendar_id VARCHAR(255);"
+psql -U postgres -d luna -f db/migrations/002_google_calendar_sync.sql
+psql -U postgres -d luna -f db/migrations/003_task_planned_datetime.sql
+psql -U postgres -d luna -f db/migrations/004_task_category.sql
+psql -U postgres -d luna -f db/migrations/005_remove_task_due_calendar_events.sql
+psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
 
 # Optional: load sample data
 psql -U postgres -d luna -f db/seed.sql
@@ -123,7 +125,7 @@ git pull
 
 Then re-run `npm install` in both `frontend/` and `backend/` in case dependencies changed.
 
-If the backend fails to start due to a missing column, run the alter table command from Step 3 again — teammates may have added new columns.
+If the backend fails to start due to a missing column, re-run the migrations in Step 3 — teammates may have added a new migration.
 
 ---
 
@@ -157,7 +159,11 @@ psql -U postgres -d postgres -c "DROP DATABASE IF EXISTS luna;"
 psql -U postgres -d postgres -c "CREATE DATABASE luna;"
 psql -U postgres -d luna -f db/schema.sql
 psql -U postgres -d luna -f db/migrations/001_auth_calendar_sleepgoal.sql
-psql -U postgres -d luna -c "ALTER TABLE \"User\" ADD COLUMN IF NOT EXISTS google_refresh_token TEXT; ALTER TABLE \"User\" ADD COLUMN IF NOT EXISTS google_calendar_id VARCHAR(255);"
+psql -U postgres -d luna -f db/migrations/002_google_calendar_sync.sql
+psql -U postgres -d luna -f db/migrations/003_task_planned_datetime.sql
+psql -U postgres -d luna -f db/migrations/004_task_category.sql
+psql -U postgres -d luna -f db/migrations/005_remove_task_due_calendar_events.sql
+psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
 psql -U postgres -d luna -f db/seed.sql
 ```
 

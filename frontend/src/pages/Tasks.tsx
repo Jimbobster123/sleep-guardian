@@ -8,7 +8,14 @@ import { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
 import { isTaskPastDue } from '@/lib/taskOverdue';
-import { format } from 'date-fns';
+import { format, isToday } from 'date-fns';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { toast } from '@/components/ui/sonner';
 
 interface Task {
@@ -41,6 +48,75 @@ function formatDateTime(dateString: string | undefined) {
   const d = new Date(dateString);
   if (Number.isNaN(d.getTime())) return undefined;
   return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function parseTaskDate(s: string | undefined | null): Date | null {
+  if (!s) return null;
+  const raw = String(s).includes('T') ? s : String(s).replace(' ', 'T');
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Local calendar day matches "today" (due or planned). */
+function isLocalToday(s: string | undefined | null): boolean {
+  const d = parseTaskDate(s);
+  return d != null && isToday(d);
+}
+
+function plannedMs(t: Task): number | null {
+  if (!t.planned_datetime) return null;
+  const d = parseTaskDate(t.planned_datetime);
+  return d ? d.getTime() : null;
+}
+
+function dueMs(t: Task): number | null {
+  if (!t.due_datetime) return null;
+  const d = parseTaskDate(t.due_datetime);
+  return d ? d.getTime() : null;
+}
+
+/** Earliest plan or deadline — tasks with only a plan still sort among dated items. */
+function taskScheduleSortMsActive(t: Task): number {
+  const candidates = [plannedMs(t), dueMs(t)].filter(
+    (x): x is number => x != null && !Number.isNaN(x),
+  );
+  if (candidates.length === 0) return Number.MAX_SAFE_INTEGER;
+  return Math.min(...candidates);
+}
+
+/** Latest plan or deadline — for completed lists, “newest” by schedule. */
+function taskScheduleSortMsCompleted(t: Task): number {
+  const candidates = [plannedMs(t), dueMs(t)].filter(
+    (x): x is number => x != null && !Number.isNaN(x),
+  );
+  if (candidates.length === 0) return Number.NEGATIVE_INFINITY;
+  return Math.max(...candidates);
+}
+
+function compareScheduleActive(a: Task, b: Task): number {
+  return taskScheduleSortMsActive(a) - taskScheduleSortMsActive(b);
+}
+
+function compareScheduleCompleted(a: Task, b: Task): number {
+  const aMs = taskScheduleSortMsCompleted(a);
+  const bMs = taskScheduleSortMsCompleted(b);
+  if (aMs !== bMs) return bMs - aMs;
+  const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
+  const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
+  return bCreated - aCreated;
+}
+
+/** For Today scope + date sort: planned time first when both are today. */
+function effectiveTodaySortMs(t: Task): number {
+  const p =
+    t.planned_datetime && isLocalToday(t.planned_datetime)
+      ? parseTaskDate(t.planned_datetime)!.getTime()
+      : null;
+  const d = t.due_datetime && isLocalToday(t.due_datetime) ? parseTaskDate(t.due_datetime)!.getTime() : null;
+  if (p != null && d != null) return p;
+  if (p != null) return p;
+  if (d != null) return d;
+  return Number.MAX_SAFE_INTEGER;
 }
 
 const Tasks = () => {
@@ -184,85 +260,56 @@ const Tasks = () => {
     }
   };
 
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+  type ListScope = 'all' | 'today' | 'late' | 'completed';
+  type SortMode = 'date' | 'priority' | 'category';
 
-  type ViewMode = 'all' | 'due_today' | 'passed' | 'by_due_date' | 'by_priority' | 'completed';
-  const [viewMode, setViewMode] = useState<ViewMode>('by_due_date');
+  const [listScope, setListScope] = useState<ListScope>('all');
+  const [sortMode, setSortMode] = useState<SortMode>('date');
 
-  const activeTasks = tasks.filter((t) => t.status !== 'completed');
-  const completedTasks = tasks.filter((t) => t.status === 'completed');
-
-  // Filter and sort based on view mode
-  const displayedTasks = (() => {
-    let filtered = activeTasks;
-
-    if (viewMode === 'all') {
-      return [...filtered].sort((a, b) => {
-        const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return aCreated - bCreated; // oldest first (order of creation)
-      });
+  const displayedTasks = useMemo(() => {
+    let base: Task[];
+    if (listScope === 'completed') {
+      base = tasks.filter((t) => t.status === 'completed');
+    } else {
+      base = tasks.filter((t) => t.status !== 'completed');
+      if (listScope === 'today') {
+        base = base.filter((t) => isLocalToday(t.due_datetime) || isLocalToday(t.planned_datetime));
+      } else if (listScope === 'late') {
+        base = base.filter((t) => isTaskPastDue(t.status, t.due_datetime));
+      }
     }
 
-    if (viewMode === 'due_today') {
-      filtered = activeTasks
-        .filter((t) => {
-          if (!t.due_datetime) return false;
-          const due = new Date(t.due_datetime).getTime();
-          return due >= startOfToday && due <= endOfToday;
-        })
-        .sort((a, b) => {
-          const aDue = new Date(a.due_datetime!).getTime();
-          const bDue = new Date(b.due_datetime!).getTime();
-          return aDue - bDue;
-        });
-      return filtered;
-    }
+    const sorted = [...base].sort((a, b) => {
+      const isCompleted = listScope === 'completed';
 
-    if (viewMode === 'passed') {
-      return activeTasks
-        .filter((t) => isTaskPastDue(t.status, t.due_datetime))
-        .sort((a, b) => {
-          const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : 0;
-          const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : 0;
-          return aDue - bDue; // oldest overdue first
-        });
-    }
+      if (sortMode === 'priority') {
+        const pr = (a.priority || 3) - (b.priority || 3);
+        if (pr !== 0) return pr;
+        return isCompleted ? compareScheduleCompleted(a, b) : compareScheduleActive(a, b);
+      }
 
-    if (viewMode === 'by_due_date') {
-      return [...filtered].sort((a, b) => {
-        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-        return aDue - bDue; // earliest first, no due date at bottom
-      });
-    }
+      if (sortMode === 'category') {
+        const ca = (a.category || '').trim().toLocaleLowerCase();
+        const cb = (b.category || '').trim().toLocaleLowerCase();
+        const aEmpty = !ca;
+        const bEmpty = !cb;
+        if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+        if (ca !== cb) return ca.localeCompare(cb);
+        return isCompleted ? compareScheduleCompleted(a, b) : compareScheduleActive(a, b);
+      }
 
-    if (viewMode === 'by_priority') {
-      return [...filtered].sort((a, b) => {
-        const prio = (a.priority || 3) - (b.priority || 3);
-        if (prio !== 0) return prio; // 1 first, then 2, then 3
-        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.MAX_SAFE_INTEGER;
-        return aDue - bDue;
-      });
-    }
+      // date (plan + deadline)
+      if (!isCompleted && listScope === 'today') {
+        return effectiveTodaySortMs(a) - effectiveTodaySortMs(b);
+      }
+      if (listScope === 'late') {
+        return compareScheduleActive(a, b);
+      }
+      return isCompleted ? compareScheduleCompleted(a, b) : compareScheduleActive(a, b);
+    });
 
-    if (viewMode === 'completed') {
-      return [...completedTasks].sort((a, b) => {
-        const aDue = a.due_datetime ? new Date(a.due_datetime).getTime() : Number.NEGATIVE_INFINITY;
-        const bDue = b.due_datetime ? new Date(b.due_datetime).getTime() : Number.NEGATIVE_INFINITY;
-        if (aDue !== bDue) return bDue - aDue;
-
-        const aCreated = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const bCreated = b.created_at ? new Date(b.created_at).getTime() : 0;
-        return bCreated - aCreated;
-      });
-    }
-
-    return filtered;
-  })();
+    return sorted;
+  }, [tasks, listScope, sortMode]);
 
   // Time budget: available = (now → bedtime today) minus planned events
   const { availableMinutes, taskMinutesToday } = useMemo(() => {
@@ -292,13 +339,9 @@ const Tasks = () => {
     }
     const availableMinutes = Math.max(0, Math.floor(availableMs / 60_000));
 
-    const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const endToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
     const todayTasks = tasks.filter((t) => {
       if (t.status === 'completed') return false;
-      if (!t.due_datetime) return false;
-      const due = new Date(t.due_datetime).getTime();
-      return due >= startToday && due <= endToday;
+      return isLocalToday(t.due_datetime) || isLocalToday(t.planned_datetime);
     });
     const taskMinutesToday = todayTasks.reduce((sum, t) => sum + (t.estimated_minutes || 0), 0);
 
@@ -342,87 +385,58 @@ const Tasks = () => {
           </div>
         )}
 
-        {/* Scope buttons + sort toggle group */}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setViewMode('all')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'all'
-                ? 'bg-accent text-accent-foreground'
-                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            All Tasks
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('due_today')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'due_today'
-                ? 'bg-accent text-accent-foreground'
-                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            Due Today
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('passed')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'passed'
-                ? 'bg-accent text-accent-foreground'
-                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            Passed
-          </button>
-          <button
-            onClick={() => setViewMode('by_due_date')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'by_due_date'
-                ? 'bg-accent text-accent-foreground'
-                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            By Due Date
-          </button>
-          <button
-            onClick={() => setViewMode('by_priority')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'by_priority'
-                ? 'bg-accent text-accent-foreground'
-                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            By Priority
-          </button>
-          <button
-            onClick={() => setViewMode('completed')}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              viewMode === 'completed'
-                ? 'bg-accent text-accent-foreground'
-                : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`}
-          >
-            Completed
-          </button>
+        <div className="rounded-xl border border-border/50 bg-muted/25 p-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch sm:gap-4">
+            <div className="flex-1 min-w-0 space-y-1.5">
+              <label htmlFor="tasks-show-scope" className="text-xs font-medium text-muted-foreground">
+                Show
+              </label>
+              <Select
+                value={listScope}
+                onValueChange={(v) => setListScope(v as ListScope)}
+              >
+                <SelectTrigger id="tasks-show-scope" className="h-9 w-full bg-background">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All tasks</SelectItem>
+                  <SelectItem value="today">Today</SelectItem>
+                  <SelectItem value="late">Late</SelectItem>
+                  <SelectItem value="completed">Done</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 min-w-0 space-y-1.5">
+              <label htmlFor="tasks-sort" className="text-xs font-medium text-muted-foreground">
+                Sort by
+              </label>
+              <Select
+                value={sortMode}
+                onValueChange={(v) => setSortMode(v as SortMode)}
+              >
+                <SelectTrigger id="tasks-sort" className="h-9 w-full bg-background">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="date">Date</SelectItem>
+                  <SelectItem value="priority">Priority</SelectItem>
+                  <SelectItem value="category">Category</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </div>
 
         {/* All tasks in one list */}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <h2 className="text-sm font-semibold text-foreground mb-2">
-            {viewMode === 'all'
-              ? 'All Tasks'
-              : viewMode === 'due_today'
-                ? 'Tasks Due Today'
-                : viewMode === 'passed'
-                  ? 'Passed — overdue and not completed'
-                  : viewMode === 'by_due_date'
-                  ? 'Tasks by Due Date'
-                  : viewMode === 'by_priority'
-                    ? 'Tasks by Priority'
-                    : 'Completed Tasks'}
+            {listScope === 'all'
+              ? 'All tasks'
+              : listScope === 'today'
+                ? 'Today — due or planned today'
+                : listScope === 'late'
+                  ? 'Late — overdue and not completed'
+                  : 'Completed'}
           </h2>
           {displayedTasks.length > 0 ? (
             <div className="space-y-2">
@@ -447,11 +461,11 @@ const Tasks = () => {
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">
-              {viewMode === 'due_today'
-                ? 'No tasks due today.'
-                : viewMode === 'passed'
+              {listScope === 'today'
+                ? 'Nothing due or planned for today.'
+                : listScope === 'late'
                   ? 'No overdue tasks — you’re all caught up.'
-                  : viewMode === 'completed'
+                  : listScope === 'completed'
                     ? 'No completed tasks yet.'
                     : 'No tasks.'}
             </p>

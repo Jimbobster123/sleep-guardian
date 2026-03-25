@@ -109,6 +109,95 @@ function buildSleepRangesForDate(date, windows, goal, windDownMinutes) {
   return { windDownStart, bedAt, sleepEnd };
 }
 
+async function validateAgainstSleepAndWindDown(userId, start, end) {
+  const goal = await getActiveSleepGoal(userId);
+  const windows = goal ? await getSleepWindows(goal.sleep_goal_id) : [];
+  const windDownMinutes = Math.max(15, Number(goal?.bedtime_flex_minutes || 60));
+
+  // Check every sleep/wind-down episode that could touch this interval (not just
+  // start/end calendar days — e.g. Sun 2am work must still catch Sat-bed → Sun wake).
+  const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate() - 1, 12, 0, 0, 0);
+  const lastDay = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1, 12, 0, 0, 0);
+  while (cursor.getTime() <= lastDay.getTime()) {
+    const d = new Date(cursor);
+    const { windDownStart, bedAt, sleepEnd } = buildSleepRangesForDate(d, windows, goal, windDownMinutes);
+    if (overlapsRange(start, end, windDownStart, bedAt)) {
+      return { ok: false, code: 'wind_down_conflict', message: 'This time overlaps your wind-down period before bedtime.' };
+    }
+    if (overlapsRange(start, end, bedAt, sleepEnd)) {
+      return { ok: false, code: 'sleep_conflict', message: 'This time overlaps your sleep window.' };
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return { ok: true };
+}
+
+/**
+ * Find a [start, end] work block ending at or before `due`, outside sleep/wind-down,
+ * with start not much before now. Steps backward in 15m increments.
+ */
+async function suggestTaskWorkSlotBeforeDue(userId, due, durationMinutes) {
+  let dueInSleepOrWindDown = false;
+  if (due) {
+    const probe = await validateAgainstSleepAndWindDown(userId, due, new Date(due.getTime() + 60 * 1000));
+    dueInSleepOrWindDown = !probe.ok;
+  }
+
+  if (!due || !Number.isFinite(durationMinutes) || durationMinutes < 15) {
+    return {
+      suggested_planned_datetime: null,
+      suggested_block_end: null,
+      hint:
+        durationMinutes > 0 && durationMinutes < 15
+          ? 'Use an estimate of at least 15 minutes to get a suggested work time.'
+          : null,
+      due_in_sleep_or_wind_down: dueInSleepOrWindDown,
+    };
+  }
+
+  const durMs = durationMinutes * 60 * 1000;
+  const stepMs = 15 * 60 * 1000;
+  const nowMs = Date.now();
+  const slackMs = 60_000;
+  const maxLookbackMs = 14 * 24 * 60 * 60 * 1000;
+
+  if (due.getTime() < nowMs + durMs - slackMs) {
+    return {
+      suggested_planned_datetime: null,
+      suggested_block_end: null,
+      hint: 'That deadline is too soon for this duration starting from now.',
+      due_in_sleep_or_wind_down: dueInSleepOrWindDown,
+    };
+  }
+
+  let end = new Date(due.getTime());
+  const floorEnd = new Date(due.getTime() - maxLookbackMs);
+
+  while (end.getTime() >= floorEnd.getTime()) {
+    const start = new Date(end.getTime() - durMs);
+    if (start.getTime() < nowMs - slackMs) {
+      break;
+    }
+    const v = await validateAgainstSleepAndWindDown(userId, start, end);
+    if (v.ok) {
+      return {
+        suggested_planned_datetime: toPgTimestampLocal(start),
+        suggested_block_end: toPgTimestampLocal(end),
+        hint: null,
+        due_in_sleep_or_wind_down: dueInSleepOrWindDown,
+      };
+    }
+    end = new Date(end.getTime() - stepMs);
+  }
+
+  return {
+    suggested_planned_datetime: null,
+    suggested_block_end: null,
+    hint: 'Could not find a slot before this deadline outside sleep and wind-down. Try a later due, a shorter estimate, or pick a planned time manually.',
+    due_in_sleep_or_wind_down: dueInSleepOrWindDown,
+  };
+}
+
 async function validateSchedule({ userId, start, end, excludeEventId, excludeTaskId }) {
   const conflicts = await getConflictingCalendarEvents(userId, { start, end, excludeEventId, excludeTaskId });
   if (conflicts.length) {
@@ -119,21 +208,7 @@ async function validateSchedule({ userId, start, end, excludeEventId, excludeTas
       details: conflicts.slice(0, 3),
     };
   }
-
-  const goal = await getActiveSleepGoal(userId);
-  const windows = goal ? await getSleepWindows(goal.sleep_goal_id) : [];
-  const windDownMinutes = Math.max(15, Number(goal?.bedtime_flex_minutes || 60));
-  const dayChecks = [new Date(start), new Date(end)];
-  for (const d of dayChecks) {
-    const { windDownStart, bedAt, sleepEnd } = buildSleepRangesForDate(d, windows, goal, windDownMinutes);
-    if (overlapsRange(start, end, windDownStart, bedAt)) {
-      return { ok: false, code: 'wind_down_conflict', message: 'This time overlaps your wind-down period before bedtime.' };
-    }
-    if (overlapsRange(start, end, bedAt, sleepEnd)) {
-      return { ok: false, code: 'sleep_conflict', message: 'This time overlaps your sleep window.' };
-    }
-  }
-  return { ok: true };
+  return validateAgainstSleepAndWindDown(userId, start, end);
 }
 
 router.get('/', requireAuth, async (req, res) => {
@@ -301,6 +376,21 @@ router.post('/tasks', requireAuth, async (req, res) => {
     }
     console.error('Create task error:', err);
     res.status(500).json({ error: 'Failed to create task', details: err.message });
+  }
+});
+
+router.get('/tasks/suggest-plan', requireAuth, async (req, res) => {
+  try {
+    const rawDue = req.query?.due_datetime;
+    const due = parseDateInput(typeof rawDue === 'string' ? rawDue : '');
+    const minutes = parsePositiveInt(req.query?.estimated_minutes, 60);
+    if (!due) {
+      return res.status(400).json({ error: 'due_datetime query parameter is required' });
+    }
+    const out = await suggestTaskWorkSlotBeforeDue(req.user.user_id, due, minutes);
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to suggest plan', details: err.message });
   }
 });
 

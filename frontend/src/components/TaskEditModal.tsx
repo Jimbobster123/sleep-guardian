@@ -1,10 +1,11 @@
 import { ChevronDown, ChevronRight, X } from 'lucide-react';
-import { ApiError } from '@/lib/api';
-import { useState } from 'react';
+import { ApiError, apiJson } from '@/lib/api';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useAuth } from '@/contexts/AuthContext';
 import { effectiveTimeZone, parseApiTimestamp } from '@/lib/calendarTime';
+import { blurNumberInputOnWheel } from '@/lib/utils';
 import { DateTime } from 'luxon';
 
 interface Task {
@@ -48,8 +49,22 @@ interface TaskEditModalProps {
   onDelete?: (task: Task) => Promise<void>;
 }
 
+type PlanSuggestionResponse = {
+  suggested_planned_datetime: string | null;
+  suggested_block_end: string | null;
+  hint: string | null;
+  due_in_sleep_or_wind_down: boolean;
+};
+
+function formatPlanRange(startStr: string, endStr: string, zone: string) {
+  const s = parseApiTimestamp(startStr, zone);
+  const e = parseApiTimestamp(endStr, zone);
+  if (!s || !e) return '';
+  return `${s.toFormat('ccc, LLL d • h:mm a')} – ${e.toFormat('h:mm a')}`;
+}
+
 const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskEditModalProps) => {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const zone = effectiveTimeZone(user?.timezone);
   const [formData, setFormData] = useState<Task>(task);
   const [showAdditional, setShowAdditional] = useState<boolean>(() =>
@@ -58,10 +73,50 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [planSuggestion, setPlanSuggestion] = useState<PlanSuggestionResponse | null>(null);
+  const [planSuggestLoading, setPlanSuggestLoading] = useState(false);
 
   const handleChange = (field: keyof Task, value: unknown) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
+
+  const minutesForSuggestion = formData.due_datetime
+    ? Math.max(15, formData.estimated_minutes > 0 ? formData.estimated_minutes : 60)
+    : 0;
+  const usingDefaultDurationForSuggestion = Boolean(
+    formData.due_datetime && (!formData.estimated_minutes || formData.estimated_minutes < 15),
+  );
+
+  useEffect(() => {
+    if (!token || !formData.due_datetime || minutesForSuggestion < 15) {
+      setPlanSuggestion(null);
+      setPlanSuggestLoading(false);
+      return;
+    }
+    const due = formData.due_datetime;
+    const est = minutesForSuggestion;
+    let cancelled = false;
+    setPlanSuggestLoading(true);
+    setPlanSuggestion(null);
+    const t = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const params = new URLSearchParams({ due_datetime: due, estimated_minutes: String(est) });
+          const data = await apiJson<PlanSuggestionResponse>(`/api/me/tasks/suggest-plan?${params}`, { token });
+          if (!cancelled) setPlanSuggestion(data);
+        } catch {
+          if (!cancelled) setPlanSuggestion(null);
+        } finally {
+          if (!cancelled) setPlanSuggestLoading(false);
+        }
+      })();
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+      setPlanSuggestLoading(false);
+    };
+  }, [token, formData.due_datetime, minutesForSuggestion]);
 
   const handleSave = async () => {
     const trimmedTitle = (formData.title || '').trim();
@@ -131,24 +186,31 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
     return dt ? dt.toFormat('HH:mm') : '';
   };
   const setDueFromDateAndTime = (date: string, time: string) => {
+    // Allow users to set date first then time (and vice versa).
+    // Only explicit clears (empty string from an input) or the Clear button should clear the field.
     if (!date && !time) {
       handleChange('due_datetime', undefined);
       return;
     }
-    const d = date || DateTime.now().setZone(zone).toFormat('yyyy-MM-dd');
-    const t = time || '00:00';
+    const existingDate = toDateValue(formData.due_datetime);
+    const existingTime = toTimeValue(formData.due_datetime);
+    const d = date || existingDate || DateTime.now().setZone(zone).toFormat('yyyy-MM-dd');
+    const t = time || existingTime || '00:00';
     const [hh, mm] = t.split(':').map((x) => parseInt(x, 10));
     const [y, mo, da] = d.split('-').map((x) => parseInt(x, 10));
     const dt = DateTime.fromObject({ year: y, month: mo, day: da, hour: hh || 0, minute: mm || 0, second: 0 }, { zone });
     handleChange('due_datetime', dt.isValid ? dt.toFormat('yyyy-MM-dd HH:mm:ss') : undefined);
   };
   const setPlannedFromDateAndTime = (date: string, time: string) => {
+    // Allow users to set date first then time (and vice versa).
     if (!date && !time) {
       handleChange('planned_datetime', undefined);
       return;
     }
-    const d = date || DateTime.now().setZone(zone).toFormat('yyyy-MM-dd');
-    const t = time || '00:00';
+    const existingDate = toDateValue(formData.planned_datetime);
+    const existingTime = toTimeValue(formData.planned_datetime);
+    const d = date || existingDate || DateTime.now().setZone(zone).toFormat('yyyy-MM-dd');
+    const t = time || existingTime || '00:00';
     const [hh, mm] = t.split(':').map((x) => parseInt(x, 10));
     const [y, mo, da] = d.split('-').map((x) => parseInt(x, 10));
     const dt = DateTime.fromObject({ year: y, month: mo, day: da, hour: hh || 0, minute: mm || 0, second: 0 }, { zone });
@@ -195,13 +257,13 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                   Priority <span className="text-destructive">*</span>
                 </label>
                 <select
-                  value={formData.priority}
-                  onChange={(e) => handleChange('priority', parseInt(e.target.value))}
+                  value={Math.min(3, Math.max(1, 4 - (Number(formData.priority) || 3)))}
+                  onChange={(e) => handleChange('priority', 4 - Number.parseInt(e.target.value, 10))}
                   className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
                 >
-                  <option value={1}>1 — Highest</option>
+                  <option value={1}>1 — Low</option>
                   <option value={2}>2 — Medium</option>
-                  <option value={3}>3 — Low</option>
+                  <option value={3}>3 — High</option>
                 </select>
               </div>
               <div className="flex-1 min-w-0">
@@ -230,17 +292,77 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                 <input
                   type="date"
                   value={toDateValue(formData.due_datetime)}
-                  onChange={(e) => setDueFromDateAndTime(e.target.value, toTimeValue(formData.due_datetime))}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) handleChange('due_datetime', undefined);
+                    else setDueFromDateAndTime(v, toTimeValue(formData.due_datetime));
+                  }}
                   className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
                 />
                 <input
                   type="time"
                   step={900}
                   value={toTimeValue(formData.due_datetime)}
-                  onChange={(e) => setDueFromDateAndTime(toDateValue(formData.due_datetime), e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) handleChange('due_datetime', undefined);
+                    else setDueFromDateAndTime(toDateValue(formData.due_datetime), v);
+                  }}
                   className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
                 />
+                {formData.due_datetime ? (
+                  <button
+                    type="button"
+                    onClick={() => handleChange('due_datetime', undefined)}
+                    className="px-3 py-2 rounded-lg border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-sm font-medium"
+                  >
+                    Clear
+                  </button>
+                ) : null}
               </div>
+              {!planSuggestLoading && planSuggestion?.due_in_sleep_or_wind_down ? (
+                <p className="text-xs text-muted-foreground mt-1">Due falls during sleep or wind-down.</p>
+              ) : null}
+              {formData.due_datetime &&
+              (planSuggestLoading ||
+                planSuggestion?.hint ||
+                (planSuggestion?.suggested_planned_datetime && planSuggestion?.suggested_block_end)) ? (
+                <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 mt-2 space-y-2">
+                  {planSuggestLoading ? (
+                    <p className="text-xs text-muted-foreground">Finding a time to work before this deadline…</p>
+                  ) : planSuggestion?.suggested_planned_datetime && planSuggestion.suggested_block_end ? (
+                    <>
+                      <p className="text-xs text-foreground">
+                        <span className="font-medium">Suggested work block</span> before your due time (avoids sleep & wind-down):
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatPlanRange(
+                          planSuggestion.suggested_planned_datetime,
+                          planSuggestion.suggested_block_end,
+                          zone,
+                        )}
+                      </p>
+                      {usingDefaultDurationForSuggestion ? (
+                        <p className="text-[11px] text-muted-foreground">
+                          Assuming {minutesForSuggestion} minutes — adjust under Additional options if needed.
+                        </p>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="text-xs font-medium text-accent hover:underline"
+                        onClick={() => {
+                          setShowAdditional(true);
+                          handleChange('planned_datetime', planSuggestion.suggested_planned_datetime!);
+                        }}
+                      >
+                        Use this planned time
+                      </button>
+                    </>
+                  ) : planSuggestion?.hint ? (
+                    <p className="text-xs text-muted-foreground">{planSuggestion.hint}</p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             {/* Notes — optional */}
@@ -277,19 +399,36 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                     <input
                       type="date"
                       value={toDateValue(formData.planned_datetime)}
-                      onChange={(e) => setPlannedFromDateAndTime(e.target.value, toTimeValue(formData.planned_datetime))}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (!v) handleChange('planned_datetime', undefined);
+                        else setPlannedFromDateAndTime(v, toTimeValue(formData.planned_datetime));
+                      }}
                       className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
                     />
                     <input
                       type="time"
                       step={900}
                       value={toTimeValue(formData.planned_datetime)}
-                      onChange={(e) => setPlannedFromDateAndTime(toDateValue(formData.planned_datetime), e.target.value)}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (!v) handleChange('planned_datetime', undefined);
+                        else setPlannedFromDateAndTime(toDateValue(formData.planned_datetime), v);
+                      }}
                       className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
                     />
+                    {formData.planned_datetime ? (
+                      <button
+                        type="button"
+                        onClick={() => handleChange('planned_datetime', undefined)}
+                        className="px-3 py-2 rounded-lg border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-sm font-medium"
+                      >
+                        Clear
+                      </button>
+                    ) : null}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    When you plan to work on this. Adds to your calendar. Times use your profile timezone
+                    When you plan to work on this. Adds to your calendar. Cannot overlap sleep or wind-down (your sleep goal). Times use your profile timezone
                     {zone ? ` (${zone})` : ''}.
                   </p>
                 </div>
@@ -297,18 +436,49 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                 {/* Estimated duration */}
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1 block">
-                    Estimated duration (minutes)
+                    Estimated duration
                   </label>
-                  <input
-                    type="number"
-                    value={formData.estimated_minutes || ''}
-                    onChange={(e) =>
-                      handleChange('estimated_minutes', parseInt(e.target.value, 10) || 0)
-                    }
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                    placeholder="e.g. 30"
-                    min="0"
-                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-medium text-muted-foreground">Hours</label>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min="0"
+                        max="24"
+                        value={Math.floor((formData.estimated_minutes || 0) / 60) || ''}
+                        onChange={(e) => {
+                          const nextH = Math.max(0, parseInt(e.target.value, 10) || 0);
+                          const currentM = Math.max(0, (formData.estimated_minutes || 0) % 60);
+                          handleChange('estimated_minutes', nextH * 60 + currentM);
+                        }}
+                        onWheel={blurNumberInputOnWheel}
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                        placeholder="e.g. 1"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-medium text-muted-foreground">Minutes</label>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min="0"
+                        max="59"
+                        step="5"
+                        value={(formData.estimated_minutes || 0) % 60 || ''}
+                        onChange={(e) => {
+                          const nextMRaw = parseInt(e.target.value, 10) || 0;
+                          const nextM = Math.min(59, Math.max(0, nextMRaw));
+                          const currentH = Math.max(0, Math.floor((formData.estimated_minutes || 0) / 60));
+                          handleChange('estimated_minutes', currentH * 60 + nextM);
+                        }}
+                        onWheel={blurNumberInputOnWheel}
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                        placeholder="e.g. 30"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">Used for the suggested work block.</p>
                 </div>
 
                 {mode === 'create' && (
@@ -336,6 +506,7 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                             max="365"
                             value={formData.repeat_count || 5}
                             onChange={(e) => handleChange('repeat_count', parseInt(e.target.value, 10) || 1)}
+                            onWheel={blurNumberInputOnWheel}
                             className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
                           />
                         </div>
