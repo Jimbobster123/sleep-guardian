@@ -10,14 +10,13 @@ import {
   CheckSquare,
   Clock3,
   Trash2,
-  Star,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { format, addDays, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, eachDayOfInterval, isSameDay, isSameMonth, isToday } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
 import { isTaskPastDue } from '@/lib/taskOverdue';
-import { priorityStarCount } from '@/lib/taskPriority';
+import PriorityIndicator from '@/components/PriorityIndicator';
 import {
   combineDateAndTimeForApi,
   defaultEndOneHourAfterStart,
@@ -29,6 +28,7 @@ import {
   percentFromHourFloatFrom3am,
   snapMinutesToQuarter,
 } from '@/lib/calendarTime';
+import { blurNumberInputOnWheel } from '@/lib/utils';
 import { DateTime } from 'luxon';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -80,21 +80,9 @@ function LatePill({ compact }: { compact?: boolean }) {
   );
 }
 
-function taskPriorityStars(event: DbEvent, compact: boolean) {
-  const n =
-    event.task_id && event.task_priority != null
-      ? priorityStarCount(Number(event.task_priority))
-      : 0;
-  if (n === 0) return null;
-  const size = compact ? 'w-2.5 h-2.5' : 'w-3.5 h-3.5';
-  const title = n === 2 ? 'High priority' : 'Medium priority';
-  return (
-    <span className="inline-flex items-center gap-0.5 text-warning flex-shrink-0" title={title}>
-      {Array.from({ length: n }).map((_, i) => (
-        <Star key={i} className={`${size} fill-warning text-warning`} aria-hidden />
-      ))}
-    </span>
-  );
+function taskPriorityIndicator(event: DbEvent, compact: boolean) {
+  if (!event.task_id || event.task_priority == null) return null;
+  return <PriorityIndicator priority={Number(event.task_priority)} compact={compact} />;
 }
 
 type SleepGoalResponse = {
@@ -845,6 +833,7 @@ const CalendarPage = () => {
                         max="365"
                         value={createRepeatCount}
                         onChange={(e) => setCreateRepeatCount(parseInt(e.target.value, 10) || 1)}
+                        onWheel={blurNumberInputOnWheel}
                         disabled={createRepeat === 'none' || Boolean(createRepeatUntil)}
                         className="h-9"
                       />
@@ -1063,7 +1052,7 @@ const CalendarPage = () => {
                               <Clock3 className="w-3.5 h-3.5 text-accent flex-shrink-0" />
                             ) : null}
                             {calendarTaskPastDue(event) && <LatePill />}
-                            {taskPriorityStars(event, false)}
+                            {taskPriorityIndicator(event, false)}
                             <span
                               className={`text-[10px] px-1.5 py-0.5 rounded-sm border flex-shrink-0 ${
                                 event.source === 'task_planned'
@@ -1148,7 +1137,7 @@ const CalendarPage = () => {
                           className={`w-full text-left rounded px-1.5 py-0.5 text-[10px] truncate flex items-center gap-0.5 ${getEventStyle(event.source)}`}
                         >
                           {calendarTaskPastDue(event) && <LatePill compact />}
-                          {taskPriorityStars(event, true)}
+                          {taskPriorityIndicator(event, true)}
                           <span className="truncate">{event.title || 'Event'}</span>
                         </button>
                       ))}
@@ -1207,7 +1196,7 @@ const CalendarPage = () => {
                         className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate flex items-center gap-0.5 ${getEventStyle(event.source)}`}
                       >
                         {calendarTaskPastDue(event) && <LatePill compact />}
-                        {taskPriorityStars(event, true)}
+                        {taskPriorityIndicator(event, true)}
                         <span className="truncate">{event.title || 'Event'}</span>
                       </button>
                     ))}

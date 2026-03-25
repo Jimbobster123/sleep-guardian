@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { blurNumberInputOnWheel } from "@/lib/utils";
 
 export type GoalType = "fixed_bedtime" | "fixed_wake_time" | "fixed_duration";
 
@@ -259,6 +260,7 @@ export default function SleepGoalForm({
             max="16"
             value={sleepHours}
             onChange={(e) => setSleepHours(e.target.value)}
+            onWheel={blurNumberInputOnWheel}
           />
           <p className="text-xs text-muted-foreground">
             We&apos;ll compute your bedtime from your wake times and this sleep amount.
@@ -278,6 +280,7 @@ export default function SleepGoalForm({
           max={240}
           value={bedFlex}
           onChange={(e) => setBedFlex(e.target.value)}
+          onWheel={blurNumberInputOnWheel}
         />
         <p className="text-xs text-muted-foreground">
           How much wiggle room you want around your ideal bedtime.
