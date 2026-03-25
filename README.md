@@ -226,7 +226,8 @@ sleep-guardian/
 - Login / Signup with session auth
 - Sleep goal setup (bedtime, wake time, or sleep amount)
 - Per-day sleep window configuration
-- Calendar with Google Calendar ICS import
-- Task management with priority, due date, and status
+- Calendar with events and tasks listed on it
+- Task and event management with priority, due date, and status
 - Schedule conflict suggestions
 - Profile page
+- Events that conflict with bed time show warning
