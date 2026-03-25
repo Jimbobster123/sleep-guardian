@@ -47,6 +47,13 @@ type ApiCalendarEvent = {
   is_all_day?: boolean | null;
 };
 
+type OnboardingOKR = {
+  percentage: number;
+  numerator_count: number;
+  denominator_count: number;
+  interval_days: number;
+};
+
 function getEventStyle(source?: string | null) {
   if (source === 'task_planned') return 'bg-accent/15 border border-accent/30 text-foreground';
   if (source === 'task_due') return 'bg-accent/25 border border-accent/40 text-foreground';
@@ -62,6 +69,10 @@ const Home = () => {
   const [loadingTasks, setLoadingTasks] = useState(true);
   const [taskError, setTaskError] = useState<string | null>(null);
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
+
+  const [onboardingOkr, setOnboardingOkr] = useState<OnboardingOKR | null>(null);
+  const [loadingOkr, setLoadingOkr] = useState(true);
+  const [okrError, setOkrError] = useState<string | null>(null);
 
   const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const { todayStr, tomorrowStr, todayLabel } = useMemo(() => {
@@ -131,6 +142,36 @@ const Home = () => {
       cancelled = true;
     };
   }, [token, todayStr, tomorrowStr]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    let cancelled = false;
+
+    setLoadingOkr(true);
+    setOkrError(null);
+
+    const loadOkr = async () => {
+      try {
+        const data = await apiJson<OnboardingOKR>('/api/okr/onboarding-sleep-goal-reminder-7d', { token });
+        if (cancelled) return;
+        setOnboardingOkr(data);
+        setOkrError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setOkrError(err instanceof Error ? err.message : 'Failed to load OKR');
+      } finally {
+        if (!cancelled) setLoadingOkr(false);
+      }
+    };
+
+    void loadOkr();
+    const intervalId = window.setInterval(() => void loadOkr(), 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [token]);
 
   const { allDayRows, timedRows, dayEndMs } = useMemo(() => {
     const day0 = parseApiTimestamp(`${todayStr} 00:00:00`, zone);
@@ -545,6 +586,37 @@ const Home = () => {
             </>
           )}
         </button>
+
+        {/* Onboarding OKR Metric */}
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay-2">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">OKR: Sleep Setup</h2>
+              <p className="text-xs text-muted-foreground">
+                Objective: Reduce the burden of managing schedules around sleep
+              </p>
+              <p className="text-xs text-muted-foreground">Target: 80%</p>
+            </div>
+            <div className="text-right">
+              {loadingOkr || !onboardingOkr ? (
+                <p className="text-2xl font-display font-bold text-foreground">—</p>
+              ) : (
+                <p className="text-2xl font-display font-bold text-foreground">
+                  {Math.round(onboardingOkr.percentage)}%
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">first {onboardingOkr?.interval_days ?? 7} days</p>
+            </div>
+          </div>
+
+          {okrError ? <p className="text-xs text-red-500 mt-2">{okrError}</p> : null}
+
+          {onboardingOkr ? (
+            <p className="text-xs text-muted-foreground mt-2">
+              ({onboardingOkr.numerator_count}/{onboardingOkr.denominator_count}) users met the criteria
+            </p>
+          ) : null}
+        </div>
       </div>
     </div>
   );

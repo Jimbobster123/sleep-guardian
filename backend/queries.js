@@ -843,3 +843,50 @@ export async function upsertImportedCalendarEvent(userId, event) {
     is_all_day,
   });
 }
+
+export async function getOnboardingSleepGoalReminderPercentage({ intervalDays = 7 } = {}) {
+  const result = await pool.query(
+    `WITH per_user AS (
+      SELECT
+        u.user_id,
+        EXISTS (
+          SELECT 1
+          FROM "SleepGoal" sg
+          WHERE sg.user_id = u.user_id
+            AND sg.created_at >= u.created_at
+            AND sg.created_at < (u.created_at + ($1::int * interval '1 day'))
+        ) AS has_goal,
+        EXISTS (
+          SELECT 1
+          FROM "Reminder" r
+          WHERE r.user_id = u.user_id
+            AND r.enabled = true
+            AND r.created_at >= u.created_at
+            AND r.created_at < (u.created_at + ($1::int * interval '1 day'))
+        ) AS has_reminder
+      FROM "User" u
+      WHERE u.created_at IS NOT NULL
+    )
+    SELECT
+      COALESCE(
+        ROUND(
+          (100.0 * COUNT(*) FILTER (WHERE has_goal AND has_reminder)::numeric)
+          / NULLIF(COUNT(*), 0),
+          2
+        ),
+        0
+      ) AS percentage,
+      COUNT(*) FILTER (WHERE has_goal AND has_reminder) AS numerator_count,
+      COUNT(*) AS denominator_count
+    FROM per_user;`,
+    [intervalDays],
+  );
+
+  const row = result.rows[0] || { percentage: 0, numerator_count: 0, denominator_count: 0 };
+  return {
+    percentage: Number(row.percentage),
+    numerator_count: Number(row.numerator_count),
+    denominator_count: Number(row.denominator_count),
+    interval_days: intervalDays,
+  };
+}
