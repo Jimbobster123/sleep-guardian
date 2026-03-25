@@ -201,21 +201,23 @@ sleep-guardian/
     - Information is being stored in a database
 - The system shall restrict access to sleep data to the authenticated account owner only.
     - User is required to log in to see data
-
+#### Event-Driven Requirements:
+- When a user enters event information, the system will update the calendar with the event.
+- When a user views the calendar, the system shall display event name and time.
+- When a user views an event, the system shall display all event information.
+- When a user creates an account, the system will store that information.
+- When a user enters a correct username and password, they will be able to see their store information.
+#### State-Driven Requirements:
+- While the time is within the designated sleep time, the system shall inform the user that it is within this time.
 
 ### Not Complete:
 
 
 #### Event-Driven Requirements:
-- When a user enters event information, the system will update the calendar with the event.
-- When a user views the calendar, the system shall display event name and time.
-- When a user views an event, the system shall display all event information.
 - When a user enters scheduling information, the system will use inputs to calculate personalized sleep suggestions.
 - When the suggested sleep time arrives, the system shall send a notification to the user.
-- When a user creates an account, the system will store that information.
-- When a user enters a correct username and password, they will be able to see their store information.
+
 #### State-Driven Requirements:
-- While the time is within the designated sleep time, the system shall inform the user that it is within this time.
 - While the user is interacting with the 'Goal Setting' interface, the system shall display a sidebar containing sleep suggestions.
 - While the system is offline, the system shall prevent attempted interactions.
 
