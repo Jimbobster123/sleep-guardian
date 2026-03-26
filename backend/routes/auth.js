@@ -33,7 +33,7 @@ function sessionExpiryDate() {
 router.post('/signup', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { email, password, firstName, lastName, timezone } = req.body || {};
+    const { email, password, firstName, lastName, phoneNumber, timezone } = req.body || {};
     const normalizedEmail = normalizeEmail(email);
     if (!isValidEmail(normalizedEmail)) return res.status(400).json({ error: 'Invalid email' });
     if (!passwordMeetsMinimum(password)) return res.status(400).json({ error: 'Password must be at least 8 characters' });
@@ -45,14 +45,15 @@ router.post('/signup', async (req, res) => {
 
     const password_hash = await hashPassword(password);
     const userInsert = await client.query(
-      `INSERT INTO "User" (email, password_hash, first_name, last_name, timezone)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING user_id, email, first_name, last_name, timezone, created_at`,
+      `INSERT INTO "User" (email, password_hash, first_name, last_name, phone_number, timezone)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING user_id, email, first_name, last_name, phone_number, timezone, created_at`,
       [
         normalizedEmail,
         password_hash,
         firstName?.trim?.() ? firstName : null,
         lastName?.trim?.() ? lastName : null,
+        phoneNumber?.trim?.() ? phoneNumber : null,
         timezone?.trim?.() ? timezone : null,
       ]
     );
@@ -112,6 +113,7 @@ router.post('/login', async (req, res) => {
       email: userRecord.email,
       first_name: userRecord.first_name,
       last_name: userRecord.last_name,
+      phone_number: userRecord.phone_number,
       timezone: userRecord.timezone,
     };
     res.json({ token: session_token, user });

@@ -7,19 +7,18 @@ import authRoutes from './routes/auth.js';
 import meRoutes from './routes/me.js';
 import googleRoutes from './routes/google.js';
 import okrRoutes from './routes/okr.js';
+import { startBedtimeReminderService } from './reminders/service.js';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5001;
 
-// Middleware
 const frontendOrigins = (process.env.FRONTEND_URL || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
 
-// Always allow common local dev origins (Vite may use localhost or 127.0.0.1).
 if (!frontendOrigins.includes('http://localhost:8080')) frontendOrigins.push('http://localhost:8080');
 if (!frontendOrigins.includes('http://127.0.0.1:8080')) frontendOrigins.push('http://127.0.0.1:8080');
 if (!frontendOrigins.includes('http://localhost:5173')) frontendOrigins.push('http://localhost:5173');
@@ -40,10 +39,8 @@ function isLocalDevBrowserOrigin(origin) {
 app.use(
   cors({
     origin(origin, callback) {
-      // Allow non-browser tools (curl, server-to-server) that send no Origin header.
       if (!origin) return callback(null, true);
       if (frontendOrigins.includes(origin)) return callback(null, true);
-      // Any port on loopback (e.g. Vite on 8080 vs 5173, or IPv6 ::1) so dev isn't fragile.
       if (isLocalDevBrowserOrigin(origin)) return callback(null, true);
       return callback(new Error(`CORS blocked origin: ${origin}`));
     },
@@ -52,7 +49,6 @@ app.use(
 );
 app.use(express.json());
 
-// Avoid confusion: this process is the API. The React app runs on Vite (default :8080).
 app.get('/', (req, res) => {
   res.json({
     name: 'Luna API',
@@ -62,12 +58,10 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check route
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Luna API is running' });
 });
 
-// Database health check route
 app.get('/api/db-health', async (req, res) => {
   try {
     const client = await pool.connect();
@@ -79,7 +73,6 @@ app.get('/api/db-health', async (req, res) => {
   }
 });
 
-// Get all users
 app.get('/api/users', async (req, res) => {
   try {
     const users = await getAllUsers();
@@ -89,7 +82,6 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// Get user by ID
 app.get('/api/users/:userId', async (req, res) => {
   try {
     const user = await getUserById(req.params.userId);
@@ -102,7 +94,6 @@ app.get('/api/users/:userId', async (req, res) => {
   }
 });
 
-// Get tasks for a user
 app.get('/api/users/:userId/tasks', async (req, res) => {
   try {
     const tasks = await getUserTasks(req.params.userId);
@@ -112,7 +103,6 @@ app.get('/api/users/:userId/tasks', async (req, res) => {
   }
 });
 
-// Update a task
 app.put('/api/tasks/:taskId', async (req, res) => {
   try {
     const updatedTask = await updateTask(req.params.taskId, req.body);
@@ -125,39 +115,36 @@ app.put('/api/tasks/:taskId', async (req, res) => {
   }
 });
 
-// Example route
 app.get('/api/example', (req, res) => {
   res.json({ message: 'This is an example endpoint' });
 });
 
-// Auth + current-user routes
 app.use('/api/auth', authRoutes);
 app.use('/api/me', meRoutes);
 app.use('/api/google', googleRoutes);
 app.use('/api/okr', okrRoutes);
 
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Error handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
 async function start() {
   const dbConnected = await testConnection();
-  
+
   if (!dbConnected) {
-    console.warn('⚠️ Warning: Database connection failed. Some features may not work.');
+    console.warn('Warning: Database connection failed. Some features may not work.');
   }
 
   app.listen(PORT, () => {
-    console.log(`🚀 Server is running on http://localhost:${PORT}`);
+    console.log(`Server is running on http://localhost:${PORT}`);
   });
+
+  startBedtimeReminderService();
 }
 
 start();

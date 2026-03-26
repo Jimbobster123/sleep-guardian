@@ -22,6 +22,8 @@ import {
   updateCalendarEvent,
   updateTask,
   updateTaskStatus,
+  getBedtimeReminderSettings,
+  upsertBedtimeReminderSettings,
   updateUserProfile,
   deleteTaskCalendarEvents,
   upsertImportedCalendarEvent,
@@ -31,6 +33,7 @@ import {
 import { pushLocalEventToGoogle, deleteGoogleEventForLocal } from '../google/calendar.js';
 
 const router = express.Router();
+const TEXT_REMINDERS_AVAILABLE = false;
 
 const VALID_GOAL_TYPES = new Set(['fixed_bedtime', 'fixed_wake_time', 'fixed_duration']);
 
@@ -218,11 +221,83 @@ router.get('/', requireAuth, async (req, res) => {
 
 router.put('/profile', requireAuth, async (req, res) => {
   try {
-    const { first_name, last_name, timezone } = req.body || {};
-    const user = await updateUserProfile(req.user.user_id, { first_name, last_name, timezone });
+    const { email, first_name, last_name, phone_number, timezone } = req.body || {};
+    const user = await updateUserProfile(req.user.user_id, { email, first_name, last_name, phone_number, timezone });
     res.json({ user });
   } catch (err) {
+    if (err?.code === '23505') {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
     res.status(500).json({ error: 'Failed to update profile', details: err.message });
+  }
+});
+
+router.get('/bedtime-reminder', requireAuth, async (req, res) => {
+  try {
+    const settings = await getBedtimeReminderSettings(req.user.user_id);
+    if (!settings) return res.status(404).json({ error: 'User not found' });
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch bedtime reminder settings', details: err.message });
+  }
+});
+
+router.put('/bedtime-reminder', requireAuth, async (req, res) => {
+  try {
+    const existingSettings = await getBedtimeReminderSettings(req.user.user_id);
+    const {
+      email,
+      phone_number,
+      method,
+      minutes_before_bedtime,
+      enabled,
+    } = req.body || {};
+
+    const normalizedMethod = typeof method === 'string' ? method.trim().toLowerCase() : 'email';
+    if (!['email', 'text_message'].includes(normalizedMethod)) {
+      return res.status(400).json({ error: 'method must be email or text_message' });
+    }
+    if (normalizedMethod === 'text_message' && !TEXT_REMINDERS_AVAILABLE) {
+      return res.status(400).json({ error: 'Text message reminders are not available yet. Please use email for now.' });
+    }
+
+    const minutes = Math.round(Number(minutes_before_bedtime));
+    if (!Number.isFinite(minutes) || minutes < 0 || minutes > 24 * 60) {
+      return res.status(400).json({ error: 'minutes_before_bedtime must be between 0 and 1440' });
+    }
+
+    const normalizedEmail =
+      typeof email === 'string'
+        ? email.trim()
+        : String(existingSettings?.email || req.user.email || '').trim();
+    const normalizedPhone =
+      typeof phone_number === 'string'
+        ? phone_number.trim()
+        : String(existingSettings?.phone_number || req.user.phone_number || '').trim();
+    const isEnabled = Boolean(enabled);
+
+    if (isEnabled && normalizedMethod === 'email' && !normalizedEmail) {
+      return res.status(400).json({ error: 'An email address is required for email reminders' });
+    }
+
+    if (isEnabled && normalizedMethod === 'text_message' && !normalizedPhone) {
+      return res.status(400).json({ error: 'A phone number is required for text reminders' });
+    }
+
+    const settings = await upsertBedtimeReminderSettings(req.user.user_id, {
+      email: normalizedEmail,
+      phone_number: normalizedPhone,
+      method: normalizedMethod,
+      minutes_before_bedtime: minutes,
+      enabled: isEnabled,
+    });
+
+    res.json(settings);
+  } catch (err) {
+    if (err?.code === '23505') {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+    res.status(500).json({ error: 'Failed to update bedtime reminder settings', details: err.message });
   }
 });
 

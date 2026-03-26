@@ -13,6 +13,7 @@ export default function Signup() {
   const [password, setPassword] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [timezone, setTimezone] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,7 +23,7 @@ export default function Signup() {
     setBusy(true);
     setError(null);
     try {
-      await signup({ email, password, firstName, lastName, timezone });
+      await signup({ email, password, firstName, lastName, phoneNumber, timezone });
       nav("/onboarding/sleep-goal", { replace: true });
     } catch (err: any) {
       setError(err?.message || "Signup failed");
@@ -41,6 +42,7 @@ export default function Signup() {
           <div className="space-y-1">
             <Label htmlFor="email">Email</Label>
             <Input id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <p className="text-xs text-muted-foreground">Login uses your email address.</p>
           </div>
           <div className="space-y-1">
             <Label htmlFor="password">Password</Label>
@@ -63,6 +65,21 @@ export default function Signup() {
               <Label htmlFor="last">Last name</Label>
               <Input id="last" value={lastName} onChange={(e) => setLastName(e.target.value)} />
             </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="phone">Phone number (optional)</Label>
+            <Input
+              id="phone"
+              type="tel"
+              autoComplete="tel"
+              value={phoneNumber}
+              onChange={(e) => setPhoneNumber(e.target.value)}
+              placeholder="+1 555 123 4567"
+            />
+            <p className="text-xs text-muted-foreground">
+              Optional. Add a phone number if you want to receive bedtime reminders by text message.
+            </p>
           </div>
 
           <div className="space-y-1">
