@@ -29,6 +29,11 @@ function isMissingColumnError(err, columnName) {
   return err instanceof Error && err.message?.includes(columnName) && err.message?.includes('does not exist');
 }
 
+function normalizeReminderMethod(value) {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return normalized === 'text_message' ? 'text_message' : 'email';
+}
+
 let recurrenceSeriesIdColumnExistsCache = null;
 async function recurrenceSeriesIdColumnExists() {
   if (recurrenceSeriesIdColumnExistsCache != null) return recurrenceSeriesIdColumnExistsCache;
@@ -330,7 +335,7 @@ export async function deleteTaskCalendarEvents(userId, taskId) {
 export async function getAllUsers() {
   try {
     const result = await pool.query(
-      'SELECT user_id, email, first_name, last_name, timezone, google_calendar_id FROM "User" ORDER BY created_at DESC'
+      'SELECT user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id FROM "User" ORDER BY created_at DESC'
     );
     return result.rows;
   } catch (err) {
@@ -343,7 +348,7 @@ export async function getAllUsers() {
 export async function getUserById(userId) {
   try {
     const result = await pool.query(
-      'SELECT user_id, email, first_name, last_name, timezone, google_calendar_id FROM "User" WHERE user_id = $1',
+      'SELECT user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id FROM "User" WHERE user_id = $1',
       [userId]
     );
     return result.rows[0];
@@ -494,7 +499,7 @@ export async function updateTaskStatus(taskId, userId, status) {
 
 export async function getUserByEmail(email) {
   const result = await pool.query(
-    'SELECT user_id, email, password_hash, first_name, last_name, timezone, google_calendar_id FROM "User" WHERE email = $1',
+    'SELECT user_id, email, password_hash, first_name, last_name, phone_number, timezone, google_calendar_id FROM "User" WHERE email = $1',
     [email]
   );
   return result.rows[0];
@@ -506,7 +511,7 @@ export async function updateUserGoogleIntegration(userId, { google_refresh_token
      SET google_refresh_token = COALESCE($2, google_refresh_token),
          google_calendar_id = COALESCE($3, google_calendar_id)
      WHERE user_id = $1
-     RETURNING user_id, email, first_name, last_name, timezone, google_calendar_id`,
+     RETURNING user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id`,
     [userId, google_refresh_token || null, google_calendar_id || null]
   );
   return result.rows[0];
@@ -516,7 +521,7 @@ export async function createUser({ email, password_hash, first_name, last_name, 
   const result = await pool.query(
     `INSERT INTO "User" (email, password_hash, first_name, last_name, timezone)
      VALUES ($1, $2, $3, $4, $5)
-     RETURNING user_id, email, first_name, last_name, timezone, created_at`,
+     RETURNING user_id, email, first_name, last_name, phone_number, timezone, created_at`,
     [email, password_hash, asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(timezone)]
   );
   return result.rows[0];
@@ -543,7 +548,7 @@ export async function revokeSession(sessionToken) {
 
 export async function getUserBySessionToken(sessionToken) {
   const result = await pool.query(
-    `SELECT u.user_id, u.email, u.first_name, u.last_name, u.timezone,
+    `SELECT u.user_id, u.email, u.first_name, u.last_name, u.phone_number, u.timezone,
             u.google_refresh_token, u.google_calendar_id
      FROM "AuthSession" s
      JOIN "User" u ON u.user_id = s.user_id
@@ -555,17 +560,188 @@ export async function getUserBySessionToken(sessionToken) {
   return result.rows[0];
 }
 
-export async function updateUserProfile(userId, { first_name, last_name, timezone }) {
+export async function updateUserProfile(userId, { email, first_name, last_name, phone_number, timezone }) {
   const result = await pool.query(
     `UPDATE "User"
-     SET first_name = COALESCE($2, first_name),
-         last_name = COALESCE($3, last_name),
-         timezone = COALESCE($4, timezone)
+     SET email = COALESCE($2, email),
+         first_name = COALESCE($3, first_name),
+         last_name = COALESCE($4, last_name),
+         phone_number = COALESCE($5, phone_number),
+         timezone = COALESCE($6, timezone)
      WHERE user_id = $1
-     RETURNING user_id, email, first_name, last_name, timezone`,
-    [userId, asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(timezone)]
+     RETURNING user_id, email, first_name, last_name, phone_number, timezone`,
+    [userId, asNullIfEmpty(email), asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(phone_number), asNullIfEmpty(timezone)]
   );
   return result.rows[0];
+}
+
+export async function getBedtimeReminderSettings(userId) {
+  const result = await pool.query(
+    `SELECT
+       u.email,
+       u.phone_number,
+       r.reminder_id,
+       r.type,
+       r.method,
+       r.minutes_before_bedtime,
+       r.enabled,
+       r.created_at,
+       r.last_sent_at
+     FROM "User" u
+     LEFT JOIN "Reminder" r
+       ON r.user_id = u.user_id
+      AND r.type = 'bedtime'
+     WHERE u.user_id = $1
+     LIMIT 1`,
+    [userId]
+  );
+
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    email: row.email || '',
+    phone_number: row.phone_number || '',
+    reminder: {
+      reminder_id: row.reminder_id || null,
+      type: 'bedtime',
+      method: normalizeReminderMethod(row.method),
+      minutes_before_bedtime: Number(row.minutes_before_bedtime ?? 30),
+      enabled: Boolean(row.enabled),
+      created_at: row.created_at || null,
+      last_sent_at: row.last_sent_at || null,
+    },
+  };
+}
+
+export async function upsertBedtimeReminderSettings(
+  userId,
+  { email, phone_number, method, minutes_before_bedtime, enabled }
+) {
+  const normalizedMethod = normalizeReminderMethod(method);
+  const normalizedMinutes = Math.max(0, Math.min(24 * 60, Math.round(Number(minutes_before_bedtime) || 0)));
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const userResult = await client.query(
+      `UPDATE "User"
+       SET email = COALESCE($2, email),
+           phone_number = $3
+       WHERE user_id = $1
+       RETURNING user_id, email, first_name, last_name, phone_number, timezone`,
+      [userId, asNullIfEmpty(email), asNullIfEmpty(phone_number)]
+    );
+
+    const existingReminder = await client.query(
+      `SELECT reminder_id, last_sent_at
+       FROM "Reminder"
+       WHERE user_id = $1 AND type = 'bedtime'
+       LIMIT 1`,
+      [userId]
+    );
+
+    let reminder;
+    if (existingReminder.rows[0]) {
+      const result = await client.query(
+        `UPDATE "Reminder"
+         SET method = $3,
+             minutes_before_bedtime = $4,
+             enabled = $5
+         WHERE reminder_id = $1 AND user_id = $2
+         RETURNING reminder_id, type, method, minutes_before_bedtime, enabled, created_at, last_sent_at`,
+        [
+          existingReminder.rows[0].reminder_id,
+          userId,
+          normalizedMethod,
+          normalizedMinutes,
+          Boolean(enabled),
+        ]
+      );
+      reminder = result.rows[0];
+    } else {
+      const result = await client.query(
+        `INSERT INTO "Reminder" (user_id, type, method, minutes_before_bedtime, enabled)
+         VALUES ($1, 'bedtime', $2, $3, $4)
+         RETURNING reminder_id, type, method, minutes_before_bedtime, enabled, created_at, last_sent_at`,
+        [userId, normalizedMethod, normalizedMinutes, Boolean(enabled)]
+      );
+      reminder = result.rows[0];
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      user: userResult.rows[0],
+      reminder: {
+        ...reminder,
+        method: normalizeReminderMethod(reminder?.method),
+        minutes_before_bedtime: Number(reminder?.minutes_before_bedtime ?? normalizedMinutes),
+        enabled: Boolean(reminder?.enabled),
+      },
+    };
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // ignore rollback errors
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getActiveBedtimeReminders() {
+  const result = await pool.query(
+    `SELECT
+       r.reminder_id,
+       r.user_id,
+       r.method,
+       r.minutes_before_bedtime,
+       r.enabled,
+       r.last_sent_at,
+       u.email,
+       u.phone_number,
+       u.first_name,
+       u.timezone,
+       sg.sleep_goal_id,
+       sg.target_bedtime
+     FROM "Reminder" r
+     JOIN "User" u ON u.user_id = r.user_id
+     LEFT JOIN "SleepGoal" sg
+       ON sg.user_id = r.user_id
+      AND sg.active = true
+     WHERE r.type = 'bedtime'
+       AND r.enabled = true`
+  );
+  return result.rows.map((row) => ({
+    ...row,
+    method: normalizeReminderMethod(row.method),
+    minutes_before_bedtime: Number(row.minutes_before_bedtime ?? 0),
+  }));
+}
+
+export async function getSleepWindowsForGoals(sleepGoalIds) {
+  const ids = Array.from(new Set((sleepGoalIds || []).filter(Boolean)));
+  if (!ids.length) return [];
+
+  const result = await pool.query(
+    `SELECT sleep_goal_id, day_of_week, start_time, end_time
+     FROM "SleepWindow"
+     WHERE sleep_goal_id = ANY($1::uuid[])`,
+    [ids]
+  );
+  return result.rows;
+}
+
+export async function markReminderSent(reminderId, sentAt) {
+  await pool.query(
+    `UPDATE "Reminder"
+     SET last_sent_at = $2
+     WHERE reminder_id = $1`,
+    [reminderId, sentAt]
+  );
 }
 
 export async function getActiveSleepGoal(userId) {

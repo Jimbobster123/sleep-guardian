@@ -4,17 +4,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/AuthContext";
+import { ApiError } from "@/lib/api";
+
+type LoginLocationState = {
+  from?: string;
+};
 
 export default function Login() {
   const { login } = useAuth();
   const nav = useNavigate();
-  const loc = useLocation() as any;
+  const loc = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const from = (loc?.state?.from as string) || "/";
+  const from = ((loc.state as LoginLocationState | null)?.from) || "/";
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,8 +28,8 @@ export default function Login() {
     try {
       await login(email, password);
       nav(from, { replace: true });
-    } catch (err: any) {
-      setError(err?.message || "Login failed");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Login failed");
     } finally {
       setBusy(false);
     }

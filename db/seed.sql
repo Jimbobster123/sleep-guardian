@@ -1,13 +1,14 @@
 -- Luna Database Seed Data
 -- Sample users for testing and development
 
-INSERT INTO "User" (user_id, email, password_hash, first_name, last_name, timezone, created_at) VALUES
+INSERT INTO "User" (user_id, email, password_hash, first_name, last_name, phone_number, timezone, created_at) VALUES
   (
     '550e8400-e29b-41d4-a716-446655440001',
     'alex.johnson@example.com',
     '$2b$10$YIXdX5EGXzJ5Z8Ks9Y8vS.Kqt5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y5Y',
     'Alex',
     'Johnson',
+    '+15550000001',
     'America/New_York',
     '2025-01-15 10:30:00'
   ),
@@ -17,6 +18,7 @@ INSERT INTO "User" (user_id, email, password_hash, first_name, last_name, timezo
     '$2b$10$ZJYeY6FHYaK9A9Lt0Z9wT.Lru6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z6Z',
     'Marie',
     'Dubois',
+    '+15550000002',
     'Europe/Paris',
     '2025-01-16 14:15:00'
   ),
@@ -26,6 +28,7 @@ INSERT INTO "User" (user_id, email, password_hash, first_name, last_name, timezo
     '$2b$10$AKZfZ7GIZbL0B0Mu1A0xU.MsvA7A7A7A7A7A7A7A7A7A7A7A7A7A7',
     'James',
     'Chen',
+    '+15550000003',
     'Asia/Tokyo',
     '2025-01-17 08:45:00'
   ),
@@ -35,6 +38,7 @@ INSERT INTO "User" (user_id, email, password_hash, first_name, last_name, timezo
     '$2b$10$BLAgA8HJAcM1C1Nv2B1yV.Ntw8B8B8B8B8B8B8B8B8B8B8B8B8B8',
     'Sara',
     'Martinez',
+    '+15550000004',
     'America/Los_Angeles',
     '2025-01-18 16:20:00'
   ),
@@ -44,6 +48,7 @@ INSERT INTO "User" (user_id, email, password_hash, first_name, last_name, timezo
     '$2b$10$CMBhB9IKBdN2D2Ow3C2zW.OuxC9C9C9C9C9C9C9C9C9C9C9C9C9C9',
     'Priya',
     'Patel',
+    '+15550000005',
     'Asia/Mumbai',
     '2025-01-19 12:00:00'
   );
@@ -95,16 +100,16 @@ INSERT INTO "SleepWindow" (sleep_window_id, sleep_goal_id, day_of_week, start_ti
   ('750e8400-e29b-41d4-a716-446655440025', '650e8400-e29b-41d4-a716-446655440005', 5, '21:45:00', '07:15:00');
 
 -- Reminders (bedtime reminders for each user)
-INSERT INTO "Reminder" (reminder_id, user_id, type, minutes_before_bedtime, enabled) VALUES
-  ('850e8400-e29b-41d4-a716-446655440001', '550e8400-e29b-41d4-a716-446655440001', 'bedtime', 30, true),
-  ('850e8400-e29b-41d4-a716-446655440002', '550e8400-e29b-41d4-a716-446655440001', 'wakeup', 0, true),
-  ('850e8400-e29b-41d4-a716-446655440003', '550e8400-e29b-41d4-a716-446655440002', 'bedtime', 45, true),
-  ('850e8400-e29b-41d4-a716-446655440004', '550e8400-e29b-41d4-a716-446655440002', 'wakeup', 10, true),
-  ('850e8400-e29b-41d4-a716-446655440005', '550e8400-e29b-41d4-a716-446655440003', 'bedtime', 60, true),
-  ('850e8400-e29b-41d4-a716-446655440006', '550e8400-e29b-41d4-a716-446655440004', 'bedtime', 20, true),
-  ('850e8400-e29b-41d4-a716-446655440007', '550e8400-e29b-41d4-a716-446655440004', 'wakeup', 15, false),
-  ('850e8400-e29b-41d4-a716-446655440008', '550e8400-e29b-41d4-a716-446655440005', 'bedtime', 30, true),
-  ('850e8400-e29b-41d4-a716-446655440009', '550e8400-e29b-41d4-a716-446655440005', 'wakeup', 5, true);
+INSERT INTO "Reminder" (reminder_id, user_id, type, method, minutes_before_bedtime, enabled) VALUES
+  ('850e8400-e29b-41d4-a716-446655440001', '550e8400-e29b-41d4-a716-446655440001', 'bedtime', 'email', 30, true),
+  ('850e8400-e29b-41d4-a716-446655440002', '550e8400-e29b-41d4-a716-446655440001', 'wakeup', NULL, 0, true),
+  ('850e8400-e29b-41d4-a716-446655440003', '550e8400-e29b-41d4-a716-446655440002', 'bedtime', 'text_message', 45, true),
+  ('850e8400-e29b-41d4-a716-446655440004', '550e8400-e29b-41d4-a716-446655440002', 'wakeup', NULL, 10, true),
+  ('850e8400-e29b-41d4-a716-446655440005', '550e8400-e29b-41d4-a716-446655440003', 'bedtime', 'email', 60, true),
+  ('850e8400-e29b-41d4-a716-446655440006', '550e8400-e29b-41d4-a716-446655440004', 'bedtime', 'text_message', 20, true),
+  ('850e8400-e29b-41d4-a716-446655440007', '550e8400-e29b-41d4-a716-446655440004', 'wakeup', NULL, 15, false),
+  ('850e8400-e29b-41d4-a716-446655440008', '550e8400-e29b-41d4-a716-446655440005', 'bedtime', 'email', 30, true),
+  ('850e8400-e29b-41d4-a716-446655440009', '550e8400-e29b-41d4-a716-446655440005', 'wakeup', NULL, 5, true);
 
 -- Tasks (various tasks for users)
 INSERT INTO "Task" (task_id, user_id, title, notes, due_datetime, priority, status, estimated_minutes, created_at) VALUES

@@ -6,6 +6,7 @@ export type User = {
   email: string;
   first_name?: string | null;
   last_name?: string | null;
+  phone_number?: string | null;
   timezone?: string | null;
 };
 
@@ -19,6 +20,7 @@ type AuthContextValue = {
     password: string;
     firstName?: string;
     lastName?: string;
+    phoneNumber?: string;
     timezone?: string;
   }) => Promise<void>;
   logout: () => Promise<void>;
@@ -95,7 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signup = useCallback(
-    async (payload: { email: string; password: string; firstName?: string; lastName?: string; timezone?: string }) => {
+    async (payload: { email: string; password: string; firstName?: string; lastName?: string; phoneNumber?: string; timezone?: string }) => {
       const res = await apiJson<{ token: string; user: User }>("/api/auth/signup", {
         method: "POST",
         body: JSON.stringify(payload),

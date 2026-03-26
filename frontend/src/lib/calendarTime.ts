@@ -3,8 +3,12 @@ import { DateTime } from 'luxon';
 /** IANA zone from profile, or browser zone. */
 export function effectiveTimeZone(userTz?: string | null): string {
   const t = (userTz || '').trim();
-  if (t) return t;
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (t && DateTime.now().setZone(t).isValid) return t;
+
+  const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (browserZone && DateTime.now().setZone(browserZone).isValid) return browserZone;
+
+  return 'UTC';
 }
 
 const SQL_FORMAT = "yyyy-MM-dd HH:mm:ss";
