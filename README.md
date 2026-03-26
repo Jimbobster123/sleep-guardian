@@ -46,6 +46,8 @@ psql -U postgres -d luna -f db/migrations/003_task_planned_datetime.sql
 psql -U postgres -d luna -f db/migrations/004_task_category.sql
 psql -U postgres -d luna -f db/migrations/005_remove_task_due_calendar_events.sql
 psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
+psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
+psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
 
 # Optional: load sample data
 psql -U postgres -d luna -f db/seed.sql
@@ -70,6 +72,13 @@ DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=luna
 SESSION_TTL_DAYS=30
+BEDTIME_REMINDERS_ENABLED=true
+REMINDER_POLL_MS=60000
+REMINDER_FROM_EMAIL=Sleep Guardian <reminders@example.com>
+RESEND_API_KEY=your_resend_api_key
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_FROM_PHONE=+15555550123
 ```
 
 ---
@@ -164,6 +173,8 @@ psql -U postgres -d luna -f db/migrations/003_task_planned_datetime.sql
 psql -U postgres -d luna -f db/migrations/004_task_category.sql
 psql -U postgres -d luna -f db/migrations/005_remove_task_due_calendar_events.sql
 psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
+psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
+psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
 psql -U postgres -d luna -f db/seed.sql
 ```
 
@@ -233,3 +244,4 @@ sleep-guardian/
 - Profile page
 - Events that conflict with bed time show warning
 - Schedule-shifting-to-fit-sleep-goals feature
+- Bedtime reminders with selectable email or text delivery

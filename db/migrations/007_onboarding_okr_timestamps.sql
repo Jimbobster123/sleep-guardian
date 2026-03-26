@@ -10,7 +10,8 @@ ALTER TABLE "SleepGoal"
   ADD COLUMN IF NOT EXISTS created_at TIMESTAMP;
 
 ALTER TABLE "Reminder"
-  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP;
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS method VARCHAR(32);
 
 -- Backfill created_at for seeded/existing rows:
 -- Use "User.created_at + 1 day" as a best-effort approximation so the
@@ -26,6 +27,10 @@ SET created_at = u.created_at + interval '1 day'
 FROM "User" u
 WHERE r.created_at IS NULL
   AND r.user_id = u.user_id;
+
+UPDATE "Reminder"
+SET method = COALESCE(NULLIF(method, ''), 'email')
+WHERE type = 'bedtime';
 
 -- Final fallback (in case any legacy rows have NULL user.created_at)
 UPDATE "SleepGoal"

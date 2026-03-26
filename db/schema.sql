@@ -10,6 +10,7 @@ CREATE TABLE "User" (
   password_hash VARCHAR(255) NOT NULL,
   first_name VARCHAR(255),
   last_name VARCHAR(255),
+  phone_number VARCHAR(32),
   timezone VARCHAR(50),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -44,8 +45,11 @@ CREATE TABLE "Reminder" (
   reminder_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
   type VARCHAR(100),
+  method VARCHAR(32),
   minutes_before_bedtime INTEGER,
   enabled BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  last_sent_at TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES "User"(user_id) ON DELETE CASCADE
 );
 

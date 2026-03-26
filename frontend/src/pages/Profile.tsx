@@ -1,9 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import SleepGoalForm, { SleepGoalDraft } from "@/components/SleepGoalForm";
 import { ApiError, apiJson } from "@/lib/api";
 import { toast } from "@/components/ui/sonner";
@@ -13,22 +21,71 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { LogOut, Zap, Sun, Moon } from "lucide-react";
 import { TIMEZONE_OPTIONS } from "@/lib/timezones";
 
+type SleepGoalResponse = {
+  goal?: {
+    goal_type?: SleepGoalDraft["goal_type"];
+    target_sleep_minutes?: number | null;
+    target_bedtime?: string | null;
+    target_wake_time?: string | null;
+    bedtime_flex_minutes?: number | null;
+  } | null;
+  windows?: SleepGoalDraft["windows"];
+};
+
+type ReminderMethod = "email" | "text_message";
+
+type ReminderSettingsResponse = {
+  email: string;
+  phone_number: string;
+  reminder: {
+    reminder_id?: string | null;
+    type: "bedtime";
+    method: ReminderMethod;
+    minutes_before_bedtime: number;
+    enabled: boolean;
+    created_at?: string | null;
+    last_sent_at?: string | null;
+  };
+};
+
+type ReminderDraft = {
+  method: ReminderMethod;
+  minutes_before_bedtime: number;
+  enabled: boolean;
+};
+
+const TEXT_REMINDERS_AVAILABLE = false;
+
+function getErrorMessage(err: unknown, fallback: string) {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
 export default function Profile() {
   const { token, user, refreshMe, logout } = useAuth();
   const { crisisMode, setCrisisMode } = useApp();
   const { theme, toggleTheme } = useTheme();
+  const [email, setEmail] = useState(user?.email || "");
+  const [phoneNumber, setPhoneNumber] = useState(user?.phone_number || "");
   const [first, setFirst] = useState(user?.first_name || "");
   const [last, setLast] = useState(user?.last_name || "");
   const [tz, setTz] = useState(user?.timezone || "");
-  const [goal, setGoal] = useState<any>(null);
+  const [goal, setGoal] = useState<SleepGoalResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [icsBusy, setIcsBusy] = useState(false);
-   const [googleBusy, setGoogleBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const [reminderBusy, setReminderBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [searchParams] = useSearchParams();
   const [goalError, setGoalError] = useState<string | null>(null);
+  const [reminderError, setReminderError] = useState<string | null>(null);
+  const [reminderMethod, setReminderMethod] = useState<ReminderMethod>("email");
+  const [reminderMinutes, setReminderMinutes] = useState("30");
+  const [reminderEnabled, setReminderEnabled] = useState(false);
+  const [reminderInitial, setReminderInitial] = useState<ReminderDraft | null>(null);
 
   useEffect(() => {
+    setEmail(user?.email || "");
+    setPhoneNumber(user?.phone_number || "");
     setFirst(user?.first_name || "");
     setLast(user?.last_name || "");
     setTz(user?.timezone || "");
@@ -38,13 +95,57 @@ export default function Profile() {
     let cancelled = false;
     (async () => {
       if (!token) return;
-      const res = await apiJson("/api/me/sleep-goal", { token });
-      if (!cancelled) setGoal(res);
+      try {
+        const res = await apiJson<SleepGoalResponse>("/api/me/sleep-goal", { token });
+        if (!cancelled) setGoal(res);
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(getErrorMessage(err, "Failed to load sleep goal."));
+        }
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!token) return;
+      try {
+        const res = await apiJson<ReminderSettingsResponse>("/api/me/bedtime-reminder", { token });
+        if (cancelled) return;
+        const nextDraft: ReminderDraft = {
+          method: res.reminder.method || "email",
+          minutes_before_bedtime: Number(res.reminder.minutes_before_bedtime ?? 30),
+          enabled: Boolean(res.reminder.enabled),
+        };
+        setEmail(res.email || user?.email || "");
+        setPhoneNumber(res.phone_number || user?.phone_number || "");
+        setReminderMethod(nextDraft.method);
+        setReminderMinutes(String(nextDraft.minutes_before_bedtime));
+        setReminderEnabled(nextDraft.enabled);
+        setReminderInitial(nextDraft);
+        setReminderError(null);
+      } catch (err) {
+        if (cancelled) return;
+        const nextDraft: ReminderDraft = {
+          method: "email",
+          minutes_before_bedtime: 30,
+          enabled: false,
+        };
+        setReminderMethod(nextDraft.method);
+        setReminderMinutes(String(nextDraft.minutes_before_bedtime));
+        setReminderEnabled(nextDraft.enabled);
+        setReminderInitial(nextDraft);
+        setReminderError(getErrorMessage(err, "Failed to load bedtime reminder settings."));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, user?.email, user?.phone_number]);
 
   useEffect(() => {
     const googleParam = searchParams.get("google");
@@ -63,10 +164,10 @@ export default function Profile() {
       await apiJson("/api/me/profile", {
         method: "PUT",
         token,
-        body: JSON.stringify({ first_name: first, last_name: last, timezone: tz }),
+        body: JSON.stringify({ email, first_name: first, last_name: last, phone_number: phoneNumber, timezone: tz }),
       });
       await refreshMe();
-      const form = document.getElementById("profile-sleep-goal-form") as HTMLFormElement;
+      const form = document.getElementById("profile-sleep-goal-form") as HTMLFormElement | null;
       if (form) {
         form.requestSubmit();
         formWillHandleBusy = true;
@@ -74,8 +175,7 @@ export default function Profile() {
         toast.success("Saved.", { duration: 3000 });
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Failed to save.";
-      toast.error(message, { duration: 3000 });
+      toast.error(getErrorMessage(err, "Failed to save."), { duration: 3000 });
     } finally {
       if (!formWillHandleBusy) setBusy(false);
     }
@@ -86,11 +186,15 @@ export default function Profile() {
     setBusy(true);
     setGoalError(null);
     try {
-      const res = await apiJson("/api/me/sleep-goal", { method: "PUT", token, body: JSON.stringify(draft) });
+      const res = await apiJson<SleepGoalResponse>("/api/me/sleep-goal", {
+        method: "PUT",
+        token,
+        body: JSON.stringify(draft),
+      });
       setGoal({ goal: res.goal, windows: res.windows });
       toast.success("Saved.", { duration: 3000 });
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Failed to save.";
+      const message = getErrorMessage(err, "Failed to save.");
       setGoalError(message);
       toast.error(message, { duration: 3000 });
     } finally {
@@ -126,8 +230,8 @@ export default function Profile() {
     try {
       const res = await apiJson<{ url: string }>("/api/google/auth-url", { token });
       window.location.href = res.url;
-    } catch (err: any) {
-      setMsg(err?.message || "Failed to connect Google Calendar.");
+    } catch (err) {
+      setMsg(getErrorMessage(err, "Failed to connect Google Calendar."));
     } finally {
       setGoogleBusy(false);
     }
@@ -147,10 +251,58 @@ export default function Profile() {
         body: JSON.stringify({}),
       });
       setMsg(`Synced ${res.imported} events from Google.`);
-    } catch (err: any) {
-      setMsg(err?.message || "Google sync failed.");
+    } catch (err) {
+      setMsg(getErrorMessage(err, "Google sync failed."));
     } finally {
       setGoogleBusy(false);
+    }
+  };
+
+  const currentReminderDraft = useMemo<ReminderDraft>(
+    () => ({
+      method: reminderMethod,
+      minutes_before_bedtime: Math.max(0, Math.round(Number(reminderMinutes) || 0)),
+      enabled: reminderEnabled,
+    }),
+    [reminderMethod, reminderMinutes, reminderEnabled]
+  );
+
+  const reminderHasChanges = useMemo(() => {
+    if (!reminderInitial) return false;
+    return (
+      reminderInitial.method !== currentReminderDraft.method ||
+      reminderInitial.minutes_before_bedtime !== currentReminderDraft.minutes_before_bedtime ||
+      reminderInitial.enabled !== currentReminderDraft.enabled
+    );
+  }, [currentReminderDraft, reminderInitial]);
+
+  const saveReminder = async () => {
+    if (!token) return;
+    setReminderBusy(true);
+    setReminderError(null);
+    try {
+      const res = await apiJson<ReminderSettingsResponse>("/api/me/bedtime-reminder", {
+        method: "PUT",
+        token,
+        body: JSON.stringify(currentReminderDraft),
+      });
+      const nextDraft: ReminderDraft = {
+        method: res.reminder.method,
+        minutes_before_bedtime: Number(res.reminder.minutes_before_bedtime ?? 30),
+        enabled: Boolean(res.reminder.enabled),
+      };
+      setReminderMethod(nextDraft.method);
+      setReminderMinutes(String(nextDraft.minutes_before_bedtime));
+      setReminderEnabled(nextDraft.enabled);
+      setReminderInitial(nextDraft);
+      await refreshMe();
+      toast.success("Bedtime reminder settings saved.", { duration: 3000 });
+    } catch (err) {
+      const message = getErrorMessage(err, "Failed to save bedtime reminder settings.");
+      setReminderError(message);
+      toast.error(message, { duration: 3000 });
+    } finally {
+      setReminderBusy(false);
     }
   };
 
@@ -158,17 +310,16 @@ export default function Profile() {
     <div>
       <PageHeader title="Profile" compact />
       <div className="px-5 -mt-2 space-y-4 pb-6">
-        {/* User / Log out (moved from Menu) */}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 flex items-center gap-3 overflow-visible">
           <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
             <span className="text-sm font-semibold text-accent">
-              {(user?.first_name?.[0] || user?.email?.[0] || 'U').toUpperCase()}
-              {(user?.last_name?.[0] || '').toUpperCase()}
+              {(user?.first_name?.[0] || user?.email?.[0] || "U").toUpperCase()}
+              {(user?.last_name?.[0] || "").toUpperCase()}
             </span>
           </div>
           <div className="flex-1">
             <p className="text-sm font-medium text-foreground">
-              {[user?.first_name, user?.last_name].filter(Boolean).join(' ') || 'Your account'}
+              {[user?.first_name, user?.last_name].filter(Boolean).join(" ") || "Your account"}
             </p>
             <p className="text-xs text-muted-foreground">{user?.email}</p>
           </div>
@@ -184,54 +335,52 @@ export default function Profile() {
           </button>
         </div>
 
-        {/* Crisis Mode */}
         <div
           className={`rounded-xl p-4 border shadow-sm ${
-            crisisMode ? 'bg-crisis-light border-crisis/30 crisis-glow' : 'bg-card border-border/50'
+            crisisMode ? "bg-crisis-light border-crisis/30 crisis-glow" : "bg-card border-border/50"
           }`}
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div
                 className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                  crisisMode ? 'bg-crisis/10' : 'bg-muted'
+                  crisisMode ? "bg-crisis/10" : "bg-muted"
                 }`}
               >
-                <Zap className={`w-5 h-5 ${crisisMode ? 'text-warning' : 'text-sleep'}`} />
+                <Zap className={`w-5 h-5 ${crisisMode ? "text-warning" : "text-sleep"}`} />
               </div>
               <div>
                 <p className="text-sm font-semibold text-foreground">Crisis / Exam Mode</p>
                 <p className="text-xs text-muted-foreground">
-                  {crisisMode ? 'Active — strategic recovery focus' : 'For exams, deadlines, INTEX weeks'}
+                  {crisisMode ? "Active - strategic recovery focus" : "For exams, deadlines, INTEX weeks"}
                 </p>
               </div>
             </div>
             <button
               onClick={() => setCrisisMode(!crisisMode)}
-              className={`relative w-12 h-7 rounded-full transition-colors ${crisisMode ? 'bg-crisis' : 'bg-muted'}`}
+              className={`relative w-12 h-7 rounded-full transition-colors ${crisisMode ? "bg-crisis" : "bg-muted"}`}
             >
               <div
                 className={`absolute top-1 w-5 h-5 rounded-full bg-card shadow transition-transform ${
-                  crisisMode ? 'translate-x-6' : 'translate-x-1'
+                  crisisMode ? "translate-x-6" : "translate-x-1"
                 }`}
               />
             </button>
           </div>
           {crisisMode && (
             <div className="mt-3 text-xs text-foreground/80 space-y-1">
-              <p>• Goal shifts to "mitigate damage"</p>
-              <p>• Power nap & 90-min cycle suggestions enabled</p>
-              <p>• Streak penalties relaxed</p>
+              <p>- Goal shifts to "mitigate damage"</p>
+              <p>- Power nap and 90-minute cycle suggestions enabled</p>
+              <p>- Streak penalties relaxed</p>
             </div>
           )}
         </div>
 
-        {/* Dark Mode */}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                {theme === 'dark' ? (
+                {theme === "dark" ? (
                   <Sun className="w-5 h-5 text-warning" />
                 ) : (
                   <Moon className="w-5 h-5 text-sleep" />
@@ -239,27 +388,28 @@ export default function Profile() {
               </div>
               <div>
                 <p className="text-sm font-semibold text-foreground">Dark Mode</p>
-                <p className="text-xs text-muted-foreground">{theme === 'dark' ? 'Night theme active' : 'Switch to night theme'}</p>
+                <p className="text-xs text-muted-foreground">
+                  {theme === "dark" ? "Night theme active" : "Switch to night theme"}
+                </p>
               </div>
             </div>
             <button
               onClick={toggleTheme}
-              className={`relative w-12 h-7 rounded-full transition-colors ${theme === 'dark' ? 'bg-accent' : 'bg-muted'}`}
+              className={`relative w-12 h-7 rounded-full transition-colors ${theme === "dark" ? "bg-accent" : "bg-muted"}`}
             >
               <div
                 className={`absolute top-1 w-5 h-5 rounded-full bg-card shadow transition-transform ${
-                  theme === 'dark' ? 'translate-x-6' : 'translate-x-1'
+                  theme === "dark" ? "translate-x-6" : "translate-x-1"
                 }`}
               />
             </button>
           </div>
         </div>
 
-        {/* Quick Adjustments */}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <p className="text-sm font-semibold text-foreground mb-2">Quick Adjustments</p>
           <div className="flex gap-2 flex-wrap">
-            {['Late night', 'Early morning', 'Traveling', 'Sick'].map((label) => (
+            {["Late night", "Early morning", "Traveling", "Sick"].map((label) => (
               <button
                 key={label}
                 className="text-xs bg-muted text-foreground rounded-full px-3 py-1.5 hover:bg-accent/10 hover:text-accent transition-colors"
@@ -268,12 +418,39 @@ export default function Profile() {
               </button>
             ))}
           </div>
-          <p className="text-[11px] text-muted-foreground mt-2">The app will adjust intelligently without breaking your streak.</p>
+          <p className="text-[11px] text-muted-foreground mt-2">
+            The app will adjust intelligently without breaking your streak.
+          </p>
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <h2 className="text-sm font-semibold text-foreground mb-3">Profile</h2>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="space-y-1">
+              <Label>Email Address</Label>
+              <Input
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Used for login and optional bedtime reminder emails.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <Label>Phone Number</Label>
+              <Input
+                type="tel"
+                autoComplete="tel"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                placeholder="+1 555 123 4567"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Optional. Only used if you want bedtime reminders by text message.
+              </p>
+            </div>
             <div className="space-y-1">
               <Label>First</Label>
               <Input value={first} onChange={(e) => setFirst(e.target.value)} />
@@ -289,9 +466,7 @@ export default function Profile() {
                 value={tz}
                 onChange={(e) => setTz(e.target.value)}
               >
-                {tz && !TIMEZONE_OPTIONS.some((o) => o.value === tz) && (
-                  <option value={tz}>{tz}</option>
-                )}
+                {tz && !TIMEZONE_OPTIONS.some((o) => o.value === tz) && <option value={tz}>{tz}</option>}
                 {TIMEZONE_OPTIONS.map((opt) => (
                   <option key={opt.value || "empty"} value={opt.value}>
                     {opt.label}
@@ -299,6 +474,88 @@ export default function Profile() {
                 ))}
               </select>
             </div>
+          </div>
+
+          <div className="flex justify-end pt-4">
+            <Button onClick={saveAll} disabled={busy}>
+              {busy ? "Saving..." : "Save Profile"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Bedtime Reminder</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Choose how to be reminded before your bedtime goal.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">
+                {reminderEnabled ? "Enabled" : "Disabled"}
+              </span>
+              <Switch checked={reminderEnabled} onCheckedChange={setReminderEnabled} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 mt-4">
+            <div className="space-y-1">
+              <Label>Reminder Method</Label>
+              <Select
+                value={reminderMethod}
+                onValueChange={(value: ReminderMethod) => setReminderMethod(value)}
+                disabled={!reminderEnabled}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a method" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="email">Email</SelectItem>
+                  <SelectItem value="text_message" disabled={!TEXT_REMINDERS_AVAILABLE}>
+                    Text Message (Coming Soon)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Minutes Before Bedtime</Label>
+              <Input
+                type="number"
+                min="0"
+                max="1440"
+                step="1"
+                value={reminderMinutes}
+                onChange={(e) => setReminderMinutes(e.target.value)}
+                disabled={!reminderEnabled}
+              />
+            </div>
+          </div>
+
+          {!reminderEnabled ? (
+            <p className="text-[11px] text-muted-foreground mt-3">
+              Enable bedtime reminders to choose email or text delivery.
+            </p>
+          ) : !TEXT_REMINDERS_AVAILABLE ? (
+            <p className="text-[11px] text-muted-foreground mt-3">
+              Text message reminders are disabled for now. Email reminders are available.
+            </p>
+          ) : reminderMethod === "email" ? (
+            <p className="text-[11px] text-muted-foreground mt-3">
+              Email reminders will be sent to the address above.
+            </p>
+          ) : (
+            <p className="text-[11px] text-muted-foreground mt-3">
+              Text reminders will be sent to the phone number above.
+            </p>
+          )}
+
+          {reminderError ? <p className="text-xs text-red-500 mt-3">{reminderError}</p> : null}
+
+          <div className="flex justify-end pt-4">
+            <Button onClick={saveReminder} disabled={reminderBusy || !reminderHasChanges}>
+              {reminderBusy ? "Saving..." : "Save Changes"}
+            </Button>
           </div>
         </div>
 
@@ -356,15 +613,8 @@ export default function Profile() {
           </div>
         </div>
 
-        <div className="flex justify-center pt-4">
-          <Button onClick={saveAll} disabled={busy} size="lg" className="min-w-[140px]">
-            {busy ? "Saving..." : "Save"}
-          </Button>
-        </div>
-
         {msg && <div className="text-sm text-foreground/80">{msg}</div>}
       </div>
     </div>
   );
 }
-
