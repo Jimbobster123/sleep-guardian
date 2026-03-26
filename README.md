@@ -46,6 +46,8 @@ psql -U postgres -d luna -f db/migrations/003_task_planned_datetime.sql
 psql -U postgres -d luna -f db/migrations/004_task_category.sql
 psql -U postgres -d luna -f db/migrations/005_remove_task_due_calendar_events.sql
 psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
+psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
+psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
 
 # Optional: load sample data
 psql -U postgres -d luna -f db/seed.sql
