@@ -29,6 +29,21 @@ function isMissingColumnError(err, columnName) {
   return err instanceof Error && err.message?.includes(columnName) && err.message?.includes('does not exist');
 }
 
+let recurrenceSeriesIdColumnExistsCache = null;
+async function recurrenceSeriesIdColumnExists() {
+  if (recurrenceSeriesIdColumnExistsCache != null) return recurrenceSeriesIdColumnExistsCache;
+  const result = await pool.query(
+    `SELECT 1
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'CalendarEvent'
+       AND column_name = 'recurrence_series_id'
+     LIMIT 1`
+  );
+  recurrenceSeriesIdColumnExistsCache = result.rows.length > 0;
+  return recurrenceSeriesIdColumnExistsCache;
+}
+
 // Get all tasks for a user
 export async function getUserTasks(userId) {
   try {
@@ -289,6 +304,26 @@ export async function upsertTaskCalendarEvent(userId, task) {
   }
 
   return plannedUpdated;
+}
+
+export async function deleteTaskCalendarEvents(userId, taskId) {
+  // Tasks are represented in the calendar as separate rows.
+  // Deleting the task alone leaves CalendarEvent rows behind because of FK behavior (task_id -> NULL).
+  await pool.query(
+    `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
+    [userId, taskId, 'task_due']
+  );
+
+  await pool.query(
+    `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
+    [userId, taskId, 'task_planned']
+  );
+
+  // Legacy / cleanup: some older code may have used source='task'
+  await pool.query(
+    `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
+    [userId, taskId, 'task']
+  );
 }
 
 // Get all users
@@ -612,6 +647,8 @@ export async function upsertSleepWindow(sleepGoalId, { day_of_week, start_time, 
 export async function getCalendarEvents(userId, { from, to } = {}) {
   const params = [userId];
   const where = ['ce.user_id = $1'];
+  const hasRecurrenceSeriesId = await recurrenceSeriesIdColumnExists();
+  const recurrenceSelect = hasRecurrenceSeriesId ? 'ce.recurrence_series_id' : 'NULL::uuid AS recurrence_series_id';
 
   if (from) {
     params.push(from);
@@ -635,7 +672,7 @@ export async function getCalendarEvents(userId, { from, to } = {}) {
        ce.source,
        ce.external_uid,
        ce.is_all_day,
-       ce.recurrence_series_id,
+       ${recurrenceSelect},
        t.due_datetime AS task_due_datetime,
        t.status AS task_status,
        t.priority AS task_priority
@@ -677,9 +714,12 @@ export async function getConflictingCalendarEvents(userId, { start, end, exclude
 }
 
 export async function getCalendarEventById(userId, eventId) {
+  const hasRecurrenceSeriesId = await recurrenceSeriesIdColumnExists();
+  const recurrenceSelect = hasRecurrenceSeriesId ? 'ce.recurrence_series_id' : 'NULL::uuid AS recurrence_series_id';
+
   const result = await pool.query(
     `SELECT event_id, user_id, title, description, start_datetime, end_datetime, status, source,
-            external_uid, is_all_day, google_event_id, recurrence_series_id
+            external_uid, is_all_day, google_event_id, ${recurrenceSelect}
      FROM "CalendarEvent"
      WHERE event_id = $1 AND user_id = $2`,
     [eventId, userId]
@@ -688,6 +728,9 @@ export async function getCalendarEventById(userId, eventId) {
 }
 
 export async function getCalendarEventsBySeriesId(userId, recurrenceSeriesId) {
+  const hasRecurrenceSeriesId = await recurrenceSeriesIdColumnExists();
+  if (!hasRecurrenceSeriesId) return [];
+
   const result = await pool.query(
     `SELECT event_id, user_id, task_id, title, description, start_datetime, end_datetime, status, source,
             external_uid, is_all_day, google_event_id, recurrence_series_id

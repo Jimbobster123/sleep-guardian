@@ -23,6 +23,7 @@ import {
   updateTask,
   updateTaskStatus,
   updateUserProfile,
+  deleteTaskCalendarEvents,
   upsertImportedCalendarEvent,
   upsertSleepWindow,
   upsertTaskCalendarEvent,
@@ -469,9 +470,18 @@ router.delete('/tasks/:taskId', requireAuth, async (req, res) => {
     if (!existing || existing.user_id !== req.user.user_id) return res.status(404).json({ error: 'Task not found' });
 
     if (scope === 'series' && existing.recurrence_series_id) {
+      const seriesTasks = await getTasksBySeriesId(req.user.user_id, existing.recurrence_series_id);
+      for (const row of seriesTasks) {
+        await deleteTaskCalendarEvents(req.user.user_id, row.task_id);
+      }
+
       const deleted = await deleteTasksBySeriesId(req.user.user_id, existing.recurrence_series_id);
       return res.json({ ok: true, deleted_task_ids: deleted.map((t) => t.task_id) });
     }
+
+    // Remove associated calendar blocks before deleting the task.
+    // CalendarEvent rows keep source='task_planned'/'task_due', so delete them explicitly.
+    await deleteTaskCalendarEvents(req.user.user_id, req.params.taskId);
 
     const deleted = await deleteTask(req.user.user_id, req.params.taskId);
     if (!deleted) return res.status(404).json({ error: 'Task not found' });
@@ -511,6 +521,7 @@ router.get('/calendar-events', requireAuth, async (req, res) => {
 router.post('/calendar-events', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
+    const ignoreSleepValidation = Boolean(body.ignore_sleep_validation);
     const start = parseDateInput(body.start_datetime);
     const end = parseDateInput(body.end_datetime);
     if (!start || !end || end <= start) {
@@ -527,13 +538,15 @@ router.post('/calendar-events', requireAuth, async (req, res) => {
     const seriesId = body.repeat && body.repeat !== 'none' && instances.length > 1 ? randomUUID() : null;
     const createdEvents = [];
     for (const instance of instances) {
-      const valid = await validateSchedule({
-        userId: req.user.user_id,
-        start: instance.start,
-        end: instance.end,
-      });
-      if (!valid.ok) {
-        return res.status(409).json({ error: valid.message, code: valid.code, details: valid.details || null });
+      if (!ignoreSleepValidation) {
+        const valid = await validateSchedule({
+          userId: req.user.user_id,
+          start: instance.start,
+          end: instance.end,
+        });
+        if (!valid.ok) {
+          return res.status(409).json({ error: valid.message, code: valid.code, details: valid.details || null });
+        }
       }
       const created = await createCalendarEvent(req.user.user_id, {
         ...body,
@@ -646,11 +659,48 @@ router.post('/calendar-import/ics', requireAuth, express.text({ type: '*/*', lim
 
 router.post('/schedule/suggestions', requireAuth, async (req, res) => {
   try {
-    const { date } = req.body || {};
-    const result = await buildScheduleSuggestions({ userId: req.user.user_id, date });
+    const { date, proposed_event } = req.body || {};
+    const result = await buildScheduleSuggestions({
+      userId: req.user.user_id,
+      date,
+      proposedEvent: proposed_event ? { start_datetime: proposed_event.start_datetime, end_datetime: proposed_event.end_datetime } : null,
+    });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: 'Failed to build suggestions', details: err.message });
+  }
+});
+
+// Apply a suggested sleep window (updates SleepWindow table).
+// Optionally includes a proposed event time so the shifted window avoids that event.
+router.post('/sleep-window/apply-suggestion', requireAuth, async (req, res) => {
+  try {
+    const { date, proposed_event } = req.body || {};
+    const goal = await getActiveSleepGoal(req.user.user_id);
+    if (!goal) return res.status(404).json({ error: 'No active sleep goal found' });
+
+    const result = await buildScheduleSuggestions({
+      userId: req.user.user_id,
+      date,
+      proposedEvent: proposed_event
+        ? { start_datetime: proposed_event.start_datetime, end_datetime: proposed_event.end_datetime }
+        : null,
+    });
+
+    const anchorDatePart = String(result.anchor_date || '').trim() || String(result.sleep_window?.start || '').split(' ')[0];
+    const dow = anchorDatePart ? new Date(`${anchorDatePart}T00:00:00`).getDay() : new Date(`${date}T00:00:00`).getDay();
+    const startTime = String(result.sleep_window?.start || '').split(' ')[1] || null;
+    const endTime = String(result.sleep_window?.end || '').split(' ')[1] || null;
+    if (!startTime || !endTime) return res.status(500).json({ error: 'Failed to compute sleep window times' });
+
+    await upsertSleepWindow(goal.sleep_goal_id, { day_of_week: dow, start_time: startTime, end_time: endTime });
+    res.json({
+      ok: true,
+      sleep_window: result.sleep_window,
+      moved_sleep_window: Boolean(result.moved_sleep_window),
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to apply sleep window suggestion', details: err.message });
   }
 });
 
