@@ -54,6 +54,7 @@ psql -U postgres -d luna -f db/migrations/005_remove_task_due_calendar_events.sq
 psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
 psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
 psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
+psql -U postgres -d luna -f db/migrations/009_daily_sleep_log.sql
 
 # Optional: load sample data
 psql -U postgres -d luna -f db/seed.sql
@@ -159,6 +160,52 @@ If the backend fails to start due to a missing column, re-run the migrations in 
 
 ---
 
+## Database: daily sleep check-in (`DailySleepLog`)
+
+Migration **`db/migrations/009_daily_sleep_log.sql`** adds the **`DailySleepLog`** table for the morning “How was your sleep?” check-in and the charts on the **Sleep** tab. The same definition is included in **`db/schema.sql`** so new databases created from the full schema already have this table.
+
+### Table: `"DailySleepLog"`
+
+| Column | Type | Notes |
+|--------|------|--------|
+| `daily_sleep_log_id` | UUID | Primary key, default `uuid_generate_v4()` |
+| `user_id` | UUID | FK to `"User"(user_id)`, cascade delete |
+| `log_date` | DATE | Calendar day of the log (user’s intent) |
+| `sleep_goal_hours` | DOUBLE PRECISION | Target hours for that night |
+| `actual_sleep_hours` | DOUBLE PRECISION | Reported sleep duration |
+| `wake_up_count` | INTEGER | How many times they woke up |
+| `mood` | VARCHAR(50) | e.g. `exhausted`, `tired`, `okay`, `good`, `energized` |
+| `factors` | TEXT[] | Tags such as `Caffeine`, `Alcohol`, `Heavy Meal`, `Screen Time`, `Exercise`, `Stress` |
+| `latency_minutes` | INTEGER | Time to fall asleep (app uses 15, 30, 45, or 60) |
+| `created_at` / `updated_at` | TIMESTAMPTZ | Audit timestamps |
+
+**Constraint:** `UNIQUE (user_id, log_date)` — at most one row per user per calendar day.
+
+**Index:** `idx_daily_sleep_log_user_date` on `(user_id, log_date DESC)` for range queries.
+
+### API (authenticated, under `/api/me`)
+
+- **`GET /api/me/daily-sleep-log?date=YYYY-MM-DD`** — single day (or null if none).
+- **`PUT /api/me/daily-sleep-log`** — create or upsert a row for `date` (JSON body matches the columns above).
+- **`GET /api/me/daily-sleep-logs?from=YYYY-MM-DD&to=YYYY-MM-DD`** — list logs in range (for insights charts).
+
+### Optional: seed fake history for demos
+
+From **`backend/`**, with `backend/.env` pointing at your database:
+
+```bash
+cd backend
+node scripts/seed-daily-sleep-logs-sample.mjs
+```
+
+By default this upserts seven days of sample rows for **`rachel.m.pinkney@gmail.com`**. Use another account with:
+
+```bash
+EMAIL=you@example.com node scripts/seed-daily-sleep-logs-sample.mjs
+```
+
+---
+
 ## Troubleshooting
 
 **Port 5001 already in use:**
@@ -182,6 +229,9 @@ cd backend && npm install
 
 **Bedtime reminder worker errors in logs:**
 - Reminder polling logs failures instead of exiting the process; fix the underlying DB (e.g. missing **`Reminder.method`**) by running migrations **007** and **008** in order.
+
+**Saving the daily sleep log fails or `/api/me/daily-sleep-log` returns 500:**
+- Run migration **`009_daily_sleep_log.sql`** (see Step 3). Without **`DailySleepLog`**, the API cannot persist check-ins.
 
 **Frontend not loading:**
 - Make sure both backend and frontend are running
@@ -214,6 +264,7 @@ psql -U postgres -d luna -f db/migrations/005_remove_task_due_calendar_events.sq
 psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
 psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
 psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
+psql -U postgres -d luna -f db/migrations/009_daily_sleep_log.sql
 psql -U postgres -d luna -f db/seed.sql
 ```
 
@@ -275,6 +326,8 @@ sleep-guardian/
 
 ## Features
 - Login / Signup with session auth
+- Daily sleep check-in modal (home + header “Log”) with data stored in **`DailySleepLog`**
+- Sleep tab insights charts (goal vs actual, wakings, mood, latency, factors) from check-in history
 - Sleep goal setup (bedtime, wake time, or sleep amount)
 - Per-day sleep window configuration
 - Calendar with events and tasks listed on it
