@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS "DailySleepLog" (
   wake_up_count INTEGER NOT NULL DEFAULT 0,
   mood VARCHAR(50) NOT NULL,
   factors TEXT[] NOT NULL DEFAULT '{}',
-  latency_minutes INTEGER NOT NULL,
+  latency_minutes INTEGER,
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT daily_sleep_log_user_date UNIQUE (user_id, log_date)

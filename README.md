@@ -55,6 +55,7 @@ psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
 psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
 psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
 psql -U postgres -d luna -f db/migrations/009_daily_sleep_log.sql
+psql -U postgres -d luna -f db/migrations/010_daily_sleep_log_latency_nullable.sql
 
 # Optional: load sample data
 psql -U postgres -d luna -f db/seed.sql
@@ -176,7 +177,7 @@ Migration **`db/migrations/009_daily_sleep_log.sql`** adds the **`DailySleepLog`
 | `wake_up_count` | INTEGER | How many times they woke up |
 | `mood` | VARCHAR(50) | e.g. `exhausted`, `tired`, `okay`, `good`, `energized` |
 | `factors` | TEXT[] | Tags such as `Caffeine`, `Alcohol`, `Heavy Meal`, `Screen Time`, `Exercise`, `Stress` |
-| `latency_minutes` | INTEGER | Time to fall asleep (app uses 15, 30, 45, or 60) |
+| `latency_minutes` | INTEGER (nullable) | Time to fall asleep when set (15, 30, 45, or 60); omit if user skips |
 | `created_at` / `updated_at` | TIMESTAMPTZ | Audit timestamps |
 
 **Constraint:** `UNIQUE (user_id, log_date)` — at most one row per user per calendar day.
@@ -188,6 +189,7 @@ Migration **`db/migrations/009_daily_sleep_log.sql`** adds the **`DailySleepLog`
 - **`GET /api/me/daily-sleep-log?date=YYYY-MM-DD`** — single day (or null if none).
 - **`PUT /api/me/daily-sleep-log`** — create or upsert a row for `date` (JSON body matches the columns above).
 - **`GET /api/me/daily-sleep-logs?from=YYYY-MM-DD&to=YYYY-MM-DD`** — list logs in range (for insights charts).
+- **`GET /api/me/sleep-checkin-summary`** — rolling 7-day stats from check-ins: estimated **sleep quality** (0–100 from mood, wake-ups, latency), **time in bed** averages, **sleep debt** (sum of goal minus actual for short nights), per-day vs-goal minutes for the consistency chart, plus **definitions** in JSON for the UI.
 
 ### Optional: seed fake history for demos
 
@@ -232,6 +234,9 @@ cd backend && npm install
 
 **Saving the daily sleep log fails or `/api/me/daily-sleep-log` returns 500:**
 - Run migration **`009_daily_sleep_log.sql`** (see Step 3). Without **`DailySleepLog`**, the API cannot persist check-ins.
+- If saves fail after **`latency_minutes`** was made optional in the app, run **`010_daily_sleep_log_latency_nullable.sql`** (same Step 3 list). Either:
+  - **`cd backend && node scripts/apply-migration-010-latency-nullable.mjs`** (uses **`backend/.env`**), or
+  - From the repo root: **`psql -U postgres -d luna -f db/migrations/010_daily_sleep_log_latency_nullable.sql`** (adjust **`-U`** / **`-d`** to match **`.env`**).
 
 **Frontend not loading:**
 - Make sure both backend and frontend are running
@@ -265,6 +270,7 @@ psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
 psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
 psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
 psql -U postgres -d luna -f db/migrations/009_daily_sleep_log.sql
+psql -U postgres -d luna -f db/migrations/010_daily_sleep_log_latency_nullable.sql
 psql -U postgres -d luna -f db/seed.sql
 ```
 

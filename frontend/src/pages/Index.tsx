@@ -1,6 +1,6 @@
-import PageHeader from '@/components/PageHeader';
 import TaskItem from '@/components/TaskItem';
 import EmotionalCheckIn from '@/components/EmotionalCheckIn';
+import { Button } from '@/components/ui/button';
 import { useApp } from '@/contexts/AppContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSleepCheckIn } from '@/contexts/SleepCheckInContext';
@@ -12,10 +12,25 @@ import {
   parseApiTimestamp,
   parseApiTimestampToDate,
 } from '@/lib/calendarTime';
+import {
+  buildDailyAction,
+  buildHomeSleepSuggestions,
+  readDailyActionChoice,
+  writeDailyActionChoice,
+} from '@/lib/homeSleepSuggestions';
+import { estimateSleepGoalHoursForToday } from '@/lib/sleepGoalHours';
+import type { SleepCheckinSummary } from '@/lib/sleepCheckinSummary';
+import {
+  formatDebtHours,
+  formatHoursHoursMinutes,
+  formatQualityPct,
+} from '@/lib/sleepCheckinSummary';
+import nightSky from '@/assets/night-sky-header.jpg';
 import { DateTime } from 'luxon';
-import { Moon, Flame, ChevronRight } from 'lucide-react';
+import { isToday } from 'date-fns';
+import { Moon, Flame, ChevronRight, ClipboardList } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from '@/components/ui/sonner';
 
 interface Task {
@@ -25,6 +40,7 @@ interface Task {
   priority: number;
   status: string;
   estimated_minutes: number;
+  planned_datetime?: string | null;
   due_datetime?: string | null;
   category?: string | null;
 }
@@ -49,13 +65,6 @@ type ApiCalendarEvent = {
   is_all_day?: boolean | null;
 };
 
-type OnboardingOKR = {
-  percentage: number;
-  numerator_count: number;
-  denominator_count: number;
-  interval_days: number;
-};
-
 type SleepGoalSummary = {
   goal: {
     goal_type?: string;
@@ -77,9 +86,37 @@ function getEventStyle(source?: string | null) {
   return 'bg-cognitive-low text-foreground';
 }
 
+function parseTaskDate(s: string | undefined | null): Date | null {
+  if (!s) return null;
+  const raw = String(s).includes('T') ? s : String(s).replace(' ', 'T');
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isLocalToday(s: string | undefined | null): boolean {
+  const d = parseTaskDate(s);
+  return d != null && isToday(d);
+}
+
+/** Prefer planned time for today when both exist (matches Tasks page). */
+function effectiveTodaySortMs(t: Task): number {
+  const p =
+    t.planned_datetime && isLocalToday(t.planned_datetime)
+      ? parseTaskDate(t.planned_datetime)!.getTime()
+      : null;
+  const d =
+    t.due_datetime && isLocalToday(t.due_datetime)
+      ? parseTaskDate(t.due_datetime)!.getTime()
+      : null;
+  if (p != null && d != null) return p;
+  if (p != null) return p;
+  if (d != null) return d;
+  return Number.MAX_SAFE_INTEGER;
+}
+
 const Home = () => {
   const { token, user } = useAuth();
-  const { todayLog: todaySleepLog, loadingLog: loadingSleepLog, openModal: openSleepCheckIn } = useSleepCheckIn();
+  const { openModal: openSleepCheckIn } = useSleepCheckIn();
   const { bedtime, wakeTime, streak } = useApp();
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -87,11 +124,8 @@ const Home = () => {
   const [taskError, setTaskError] = useState<string | null>(null);
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
 
-  const [onboardingOkr, setOnboardingOkr] = useState<OnboardingOKR | null>(null);
-  const [loadingOkr, setLoadingOkr] = useState(true);
-  const [okrError, setOkrError] = useState<string | null>(null);
-
   const [sleepRes, setSleepRes] = useState<SleepGoalSummary | null>(null);
+  const [sleepCheckinSummary, setSleepCheckinSummary] = useState<SleepCheckinSummary | null>(null);
 
   const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const { todayStr, tomorrowStr, todayLabel } = useMemo(() => {
@@ -102,6 +136,44 @@ const Home = () => {
       todayLabel: now.toFormat('EEEE, MMM d'),
     };
   }, [zone]);
+
+  const fetchSleepCheckinSummary = useCallback(async () => {
+    if (!token) {
+      setSleepCheckinSummary(null);
+      return;
+    }
+    try {
+      const data = await apiJson<SleepCheckinSummary>('/api/me/sleep-checkin-summary', { token });
+      setSleepCheckinSummary(data);
+    } catch {
+      setSleepCheckinSummary(null);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void fetchSleepCheckinSummary();
+  }, [fetchSleepCheckinSummary]);
+
+  useEffect(() => {
+    const onSaved = () => void fetchSleepCheckinSummary();
+    window.addEventListener('luna-sleep-checkin-saved', onSaved);
+    return () => window.removeEventListener('luna-sleep-checkin-saved', onSaved);
+  }, [fetchSleepCheckinSummary]);
+
+  const homeQualityPct =
+    sleepCheckinSummary?.last_night?.quality_pct ??
+    sleepCheckinSummary?.rolling_7d.avg_quality_pct ??
+    null;
+  const homeTimeInBedHours =
+    sleepCheckinSummary?.last_night?.time_in_bed_hours ??
+    sleepCheckinSummary?.rolling_7d.avg_time_in_bed_hours ??
+    null;
+  const homeDebt7d = sleepCheckinSummary?.rolling_7d.sleep_debt_hours ?? null;
+  const homeStatsSource = sleepCheckinSummary?.last_night
+    ? 'Last log'
+    : sleepCheckinSummary?.rolling_7d.nights_logged
+      ? '7d average'
+      : null;
 
   const sleepTonightLine = useMemo(() => {
     const now = DateTime.now().setZone(zone);
@@ -121,6 +193,11 @@ const Home = () => {
     }
     return bedtime;
   }, [sleepRes, zone, bedtime]);
+
+  const tonightGoalHours = useMemo(
+    () => estimateSleepGoalHoursForToday(sleepRes, zone),
+    [sleepRes, zone],
+  );
 
   const windDownLine = useMemo(() => {
     const m = sleepRes?.goal?.bedtime_flex_minutes;
@@ -200,52 +277,6 @@ const Home = () => {
     })();
     return () => {
       cancelled = true;
-    };
-  }, [token]);
-
-  useEffect(() => {
-    if (!token) return;
-    if (loadingSleepLog) return;
-    if (todaySleepLog) return;
-    const dismissKey = `luna_sleep_checkin_dismiss_${todayStr}`;
-    const autoKey = `luna_sleep_checkin_auto_${todayStr}`;
-    try {
-      if (sessionStorage.getItem(dismissKey)) return;
-      if (sessionStorage.getItem(autoKey)) return;
-      sessionStorage.setItem(autoKey, '1');
-    } catch {
-      return;
-    }
-    openSleepCheckIn();
-  }, [token, todayStr, loadingSleepLog, todaySleepLog, openSleepCheckIn]);
-
-  useEffect(() => {
-    if (!token) return;
-
-    let cancelled = false;
-
-    setLoadingOkr(true);
-    setOkrError(null);
-
-    const loadOkr = async () => {
-      try {
-        const data = await apiJson<OnboardingOKR>('/api/okr/onboarding-sleep-goal-reminder-7d', { token });
-        if (cancelled) return;
-        setOnboardingOkr(data);
-        setOkrError(null);
-      } catch (err) {
-        if (cancelled) return;
-        setOkrError(err instanceof Error ? err.message : 'Failed to load OKR');
-      } finally {
-        if (!cancelled) setLoadingOkr(false);
-      }
-    };
-
-    void loadOkr();
-    const intervalId = window.setInterval(() => void loadOkr(), 20_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
     };
   }, [token]);
 
@@ -332,34 +363,76 @@ const Home = () => {
     };
   }, [upcomingTimedRows, nowTick, dayEndMs, zone]);
 
-  const isToday = (dateString: string | null | undefined) => {
-    if (!dateString) return false;
-    const taskDate = new Date(dateString);
-    const today = new Date();
-
-    return (
-      taskDate.getFullYear() === today.getFullYear() &&
-      taskDate.getMonth() === today.getMonth() &&
-      taskDate.getDate() === today.getDate()
-    );
-  };
-
   const formatDate = (dateString: string | null | undefined) => {
     if (!dateString) return undefined;
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
-  const homepageTasks = tasks.filter(
-    (task) =>
-      task.status !== 'completed' &&
-      task.priority === 1,
+  const formatDateTime = (dateString: string | null | undefined) => {
+    if (!dateString) return undefined;
+    const d = parseTaskDate(dateString);
+    if (!d) return undefined;
+    return d.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
+
+  const priorityOpenCount = useMemo(
+    () => tasks.filter((t) => t.status !== 'completed' && t.priority === 1).length,
+    [tasks],
   );
-  const todayTasks = tasks.filter(
-    (task) =>
-      task.status !== 'completed' &&
-      isToday(task.due_datetime),
+
+  const mergedTodayTasks = useMemo(() => {
+    const open = tasks.filter((t) => t.status !== 'completed');
+    const ids = new Set<string>();
+    const list: Task[] = [];
+    for (const t of open) {
+      if (isLocalToday(t.due_datetime) || isLocalToday(t.planned_datetime)) {
+        if (t.task_id) ids.add(t.task_id);
+        list.push(t);
+      }
+    }
+    for (const t of open) {
+      if (t.priority !== 1) continue;
+      if (t.task_id && ids.has(t.task_id)) continue;
+      if (t.task_id) ids.add(t.task_id);
+      list.push(t);
+    }
+    return [...list].sort((a, b) => {
+      const pa = a.priority ?? 99;
+      const pb = b.priority ?? 99;
+      if (pa !== pb) return pa - pb;
+      return effectiveTodaySortMs(a) - effectiveTodaySortMs(b);
+    });
+  }, [tasks]);
+
+  const homeSuggestions = useMemo(
+    () =>
+      buildHomeSleepSuggestions(sleepCheckinSummary, zone, {
+        goalHoursTonight: tonightGoalHours,
+        priorityOpenCount,
+      }),
+    [sleepCheckinSummary, zone, tonightGoalHours, priorityOpenCount],
   );
+
+  const dailyAction = useMemo(
+    () =>
+      buildDailyAction(sleepCheckinSummary, zone, {
+        goalHoursTonight: tonightGoalHours,
+        priorityOpenCount,
+      }),
+    [sleepCheckinSummary, zone, tonightGoalHours, priorityOpenCount],
+  );
+
+  const [dailyActionChoice, setDailyActionChoice] = useState(() => readDailyActionChoice(todayStr));
+
+  useEffect(() => {
+    setDailyActionChoice(readDailyActionChoice(todayStr));
+  }, [todayStr]);
 
   const handleTaskCompletion = async (taskId: string | undefined, checked: boolean) => {
     if (!token || !taskId) return;
@@ -399,142 +472,245 @@ const Home = () => {
 
   return (
     <div>
-      <PageHeader title="" compact />
-
       <div className="px-5 -mt-2 space-y-4 pb-6">
-        {/* Sleep — tonight, streak, last night, link to Sleep page */}
-        <button
-          type="button"
+        {/* Hero — tonight window + goal */}
+        <section className="relative overflow-hidden rounded-3xl border border-border/30 shadow-md animate-fade-in">
+          <img src={nightSky} alt="" className="h-40 w-full object-cover md:h-48" />
+          <div className="night-gradient absolute inset-0 opacity-80" />
+          <div className="absolute bottom-5 right-5 md:bottom-6 md:right-6 flex items-center gap-1.5 rounded-full bg-primary-foreground/15 px-3 py-1.5 backdrop-blur-sm z-[2]">
+            <Flame className="w-4 h-4 text-amber-200" />
+            <span className="text-sm font-semibold text-primary-foreground">{streak}</span>
+            <span className="text-xs text-primary-foreground/80">day</span>
+          </div>
+          <div className="absolute inset-0 flex flex-col justify-end p-5 md:p-6 pr-24 md:pr-28">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-primary-foreground/90">
+                <Moon className="h-5 w-5 shrink-0" />
+                <span className="text-xs font-semibold uppercase tracking-wider">Tonight</span>
+              </div>
+              <h1 className="mt-1 font-display text-2xl font-semibold text-primary-foreground md:text-3xl leading-tight">
+                {sleepTonightLine}
+              </h1>
+              <p className="mt-2 max-w-lg text-sm text-primary-foreground/85">
+                {windDownLine
+                  ? `${windDownLine} · ${Math.round(tonightGoalHours * 10) / 10}h target`
+                  : `${Math.round(tonightGoalHours * 10) / 10}h sleep goal · wake around ${wakeTime}`}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Sleep — tap card for sleep page; log / suggestion buttons isolated */}
+        <div
+          role="link"
+          tabIndex={0}
+          aria-label="Sleep — open full sleep page"
+          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in hover:border-accent/40 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
           onClick={() => navigate('/sleep')}
-          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in hover:border-accent/30 transition-colors"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              navigate('/sleep');
+            }
+          }}
         >
           <div className="flex justify-between items-center mb-3">
             <h2 className="text-sm font-semibold text-foreground">Sleep</h2>
-            <span className="text-xs text-accent font-medium flex items-center gap-0.5">
-              View <ChevronRight className="w-3.5 h-3.5" />
-            </span>
+            <ChevronRight className="w-4 h-4 text-accent shrink-0" aria-hidden />
           </div>
 
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-full bg-sleep-light flex items-center justify-center shrink-0 dark:bg-sleep/25">
-                <Moon className="w-5 h-5 text-sleep" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-lg font-display font-semibold text-foreground truncate">
-                  {sleepTonightLine}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {windDownLine ?? `Wake target ${wakeTime}`}
-                </p>
-              </div>
+          <p className="text-xs text-muted-foreground mb-3">
+            {sleepCheckinSummary?.last_night
+              ? 'Quick read from your latest morning log. Tap this card for charts and insights.'
+              : homeStatsSource
+                ? 'Quality and time use your rolling average until you log again.'
+                : 'Log when you wake up to personalize this card.'}
+          </p>
+
+          <div className="grid grid-cols-3 gap-2">
+            <div className="text-center py-2.5 px-1 bg-muted/50 rounded-lg min-w-0">
+              <p className="text-lg sm:text-xl font-display font-bold text-foreground tabular-nums">
+                {formatQualityPct(homeQualityPct)}
+              </p>
+              <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">Quality</p>
             </div>
-            <div className="flex items-center gap-1.5 bg-muted rounded-full px-3 py-1.5 shrink-0">
-              <Flame className="w-4 h-4 text-warning" />
-              <span className="text-sm font-semibold text-foreground">{streak}</span>
-              <span className="text-xs text-muted-foreground">day</span>
+            <div className="text-center py-2.5 px-1 bg-muted/50 rounded-lg min-w-0">
+              <p className="text-lg sm:text-xl font-display font-bold text-foreground tabular-nums">
+                {formatHoursHoursMinutes(homeTimeInBedHours)}
+              </p>
+              <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">Time in bed</p>
+            </div>
+            <div className="text-center py-2.5 px-1 bg-muted/50 rounded-lg min-w-0">
+              <p className="text-lg sm:text-xl font-display font-bold text-foreground tabular-nums">
+                {formatDebtHours(homeDebt7d)}
+              </p>
+              <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">Debt (7d)</p>
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="text-center py-3 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-display font-bold text-foreground">87%</p>
-              <p className="text-xs text-muted-foreground">sleep quality</p>
-            </div>
-            <div className="text-center py-3 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-display font-bold text-foreground">8h32m</p>
-              <p className="text-xs text-muted-foreground">time in bed</p>
-            </div>
+          <div className="mt-4 rounded-xl border border-border/40 bg-sleep-light/30 dark:bg-sleep/10 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+              Today&apos;s suggestion
+            </p>
+            {dailyActionChoice === null ? (
+              <>
+                <p className="text-sm text-foreground leading-snug">{dailyAction.headline}</p>
+                {dailyAction.detail ? (
+                  <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">{dailyAction.detail}</p>
+                ) : null}
+                <div className="flex flex-wrap gap-2 mt-3">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      writeDailyActionChoice(todayStr, 'accepted');
+                      setDailyActionChoice('accepted');
+                      toast.success('Great — we’ll cheer you on.');
+                      if (dailyAction.acceptOpenSleepLog) openSleepCheckIn();
+                      else if (dailyAction.acceptNavigate) navigate(dailyAction.acceptNavigate);
+                    }}
+                  >
+                    {dailyAction.acceptLabel ?? 'Sounds good'}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      writeDailyActionChoice(todayStr, 'declined');
+                      setDailyActionChoice('declined');
+                      toast.message('No problem — we can try again tomorrow.');
+                    }}
+                  >
+                    Not today
+                  </Button>
+                </div>
+              </>
+            ) : dailyActionChoice === 'accepted' ? (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                You accepted this nudge for today. Tap the card anytime for the full Sleep page.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                You skipped this suggestion for today. A fresh one will show tomorrow.
+              </p>
+            )}
           </div>
-        </button>
 
-        {/* Priority Tasks */}
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="text-sm font-semibold text-foreground">Priority</h2>
-            <button
+          <div className="mt-4 rounded-xl border border-border/40 bg-muted/30 p-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+              Plan for today
+            </p>
+            <ul className="space-y-2 text-xs text-foreground leading-relaxed">
+              {homeSuggestions.map((line, i) => (
+                <li key={i} className="flex gap-2">
+                  <span className="text-accent font-bold shrink-0">·</span>
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button
               type="button"
-              onClick={() => navigate('/tasks')}
-              className="text-xs text-accent font-medium flex items-center gap-0.5"
+              size="sm"
+              className="gap-1.5"
+              onClick={(e) => {
+                e.stopPropagation();
+                openSleepCheckIn();
+              }}
             >
-              All tasks <ChevronRight className="w-3.5 h-3.5" />
-            </button>
+              <ClipboardList className="w-4 h-4" />
+              Log last night
+            </Button>
+          </div>
+
+          {homeStatsSource ? (
+            <p className="text-[10px] text-muted-foreground mt-3">
+              Quality &amp; time: {homeStatsSource}. Debt sums short nights you logged.
+            </p>
+          ) : null}
+        </div>
+
+        {/* Tasks — tap card for tasks page; checkboxes stay local */}
+        <div
+          role="link"
+          tabIndex={0}
+          aria-label="Tasks — open tasks page"
+          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay hover:border-accent/40 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          onClick={() => navigate('/tasks')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              navigate('/tasks');
+            }
+          }}
+        >
+          <div className="flex justify-between items-start gap-2 mb-1">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Tasks</h2>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Priority first, then planned or due time
+              </p>
+            </div>
+            <ChevronRight className="w-4 h-4 text-accent shrink-0 mt-0.5" aria-hidden />
           </div>
           {loadingTasks ? (
             <p className="py-3 text-sm text-muted-foreground">Loading tasks...</p>
           ) : taskError ? (
             <p className="py-3 text-sm text-red-500">Error: {taskError}</p>
-          ) : homepageTasks.length === 0 ? (
-            <p className="py-3 text-sm text-muted-foreground">No priority tasks for today.</p>
+          ) : mergedTodayTasks.length === 0 ? (
+            <p className="py-3 text-sm text-muted-foreground">
+              Nothing due or planned for today. Add tasks or open the calendar to plan blocks.
+            </p>
           ) : (
-            homepageTasks.map((task) => (
-              <TaskItem
+            mergedTodayTasks.map((task) => (
+              <div
                 key={task.task_id}
-                taskId={task.task_id}
-                title={task.title}
-                subtitle={task.notes}
-                category={task.category}
-                priority={task.priority}
-                duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
-                dueDate={formatDate(task.due_datetime)}
-                completed={task.status === 'completed'}
-                pastDue={isTaskPastDue(task.status, task.due_datetime)}
-                completing={updatingTaskId === task.task_id}
-                onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
-              />
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <TaskItem
+                  taskId={task.task_id}
+                  title={task.title}
+                  subtitle={task.notes ?? undefined}
+                  category={task.category}
+                  priority={task.priority}
+                  duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
+                  plannedDate={formatDateTime(task.planned_datetime)}
+                  dueDate={formatDate(task.due_datetime)}
+                  completed={task.status === 'completed'}
+                  pastDue={isTaskPastDue(task.status, task.due_datetime)}
+                  completing={updatingTaskId === task.task_id}
+                  onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
+                />
+              </div>
             ))
           )}
         </div>
 
-        {/* Today's Tasks */}
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay">
-          <div className="flex justify-between items-center mb-3">
-            <h2 className="text-sm font-semibold text-foreground">Today's Tasks</h2>
-            <button
-              type="button"
-              onClick={() => navigate('/tasks')}
-              className="text-xs text-accent font-medium flex items-center gap-0.5"
-            >
-              All tasks <ChevronRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
-          {loadingTasks ? (
-            <p className="py-3 text-sm text-muted-foreground">Loading tasks...</p>
-          ) : taskError ? (
-            <p className="py-3 text-sm text-red-500">Error: {taskError}</p>
-          ) : todayTasks.length === 0 ? (
-            <p className="py-3 text-sm text-muted-foreground">No tasks due today.</p>
-          ) : (
-            todayTasks.map((task) => (
-              <TaskItem
-                key={task.task_id}
-                taskId={task.task_id}
-                title={task.title}
-                subtitle={task.notes}
-                category={task.category}
-                priority={task.priority}
-                duration={task.estimated_minutes && task.estimated_minutes > 0 ? task.estimated_minutes : undefined}
-                dueDate={formatDate(task.due_datetime)}
-                completed={task.status === 'completed'}
-                pastDue={isTaskPastDue(task.status, task.due_datetime)}
-                completing={updatingTaskId === task.task_id}
-                onToggleComplete={(checked) => handleTaskCompletion(task.task_id, checked)}
-              />
-            ))
-          )}
-        </div>
-
-        {/* Calendar — mini day + today's events */}
-        <button
-          type="button"
+        {/* Calendar — tap card for full calendar */}
+        <div
+          role="link"
+          tabIndex={0}
+          aria-label="Calendar — open calendar page"
+          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay-2 hover:border-accent/40 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
           onClick={() => navigate('/calendar')}
-          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay-2 hover:border-accent/30 transition-colors"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              navigate('/calendar');
+            }
+          }}
         >
           <div className="flex justify-between items-center mb-2">
             <h2 className="text-sm font-semibold text-foreground">Calendar</h2>
-            <span className="text-xs text-accent font-medium flex items-center gap-0.5">
-              View <ChevronRight className="w-3.5 h-3.5" />
-            </span>
+            <ChevronRight className="w-4 h-4 text-accent shrink-0" aria-hidden />
           </div>
           <p className="text-[11px] text-muted-foreground mb-2">{todayLabel}</p>
 
@@ -665,42 +841,11 @@ const Home = () => {
               ) : null}
             </>
           )}
-        </button>
+        </div>
 
         {/* Emotional Check-In */}
         <div className="animate-fade-in-delay-2">
           <EmotionalCheckIn />
-        </div>
-
-        {/* Onboarding OKR Metric */}
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay-2">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-sm font-semibold text-foreground">OKR: Sleep Setup</h2>
-              <p className="text-xs text-muted-foreground">
-                Objective: Reduce the burden of managing schedules around sleep
-              </p>
-              <p className="text-xs text-muted-foreground">Target: 80%</p>
-            </div>
-            <div className="text-right">
-              {loadingOkr || !onboardingOkr ? (
-                <p className="text-2xl font-display font-bold text-foreground">—</p>
-              ) : (
-                <p className="text-2xl font-display font-bold text-foreground">
-                  {Math.round(onboardingOkr.percentage)}%
-                </p>
-              )}
-              <p className="text-xs text-muted-foreground">first {onboardingOkr?.interval_days ?? 7} days</p>
-            </div>
-          </div>
-
-          {okrError ? <p className="text-xs text-red-500 mt-2">{okrError}</p> : null}
-
-          {onboardingOkr ? (
-            <p className="text-xs text-muted-foreground mt-2">
-              ({onboardingOkr.numerator_count}/{onboardingOkr.denominator_count}) users met the criteria
-            </p>
-          ) : null}
         </div>
       </div>
     </div>

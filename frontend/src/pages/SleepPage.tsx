@@ -7,10 +7,17 @@ import { useApp } from '@/contexts/AppContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
 import { effectiveTimeZone, formatWallTime12h } from '@/lib/calendarTime';
+import { estimateSleepGoalHoursForToday } from '@/lib/sleepGoalHours';
+import type { SleepCheckinSummary } from '@/lib/sleepCheckinSummary';
+import {
+  formatDebtHours,
+  formatHoursHoursMinutes,
+  formatQualityPct,
+} from '@/lib/sleepCheckinSummary';
 import nightSky from '@/assets/night-sky-header.jpg';
 import { DateTime } from 'luxon';
 import { Moon, Shield, Sparkles } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 type SleepGoalSummary = {
@@ -34,6 +41,7 @@ const SleepPage = () => {
   const { currentSleepHours, sleepGoal, consistencyScore, crisisMode, bedtime, wakeTime, streak } = useApp();
   const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const [sleepRes, setSleepRes] = useState<SleepGoalSummary | null>(null);
+  const [checkinSummary, setCheckinSummary] = useState<SleepCheckinSummary | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -50,6 +58,29 @@ const SleepPage = () => {
       cancelled = true;
     };
   }, [token]);
+
+  const fetchCheckinSummary = useCallback(async () => {
+    if (!token) {
+      setCheckinSummary(null);
+      return;
+    }
+    try {
+      const data = await apiJson<SleepCheckinSummary>('/api/me/sleep-checkin-summary', { token });
+      setCheckinSummary(data);
+    } catch {
+      setCheckinSummary(null);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void fetchCheckinSummary();
+  }, [fetchCheckinSummary]);
+
+  useEffect(() => {
+    const onSaved = () => void fetchCheckinSummary();
+    window.addEventListener('luna-sleep-checkin-saved', onSaved);
+    return () => window.removeEventListener('luna-sleep-checkin-saved', onSaved);
+  }, [fetchCheckinSummary]);
 
   const tonightLine = useMemo(() => {
     const now = DateTime.now().setZone(zone);
@@ -71,7 +102,31 @@ const SleepPage = () => {
   }, [sleepRes, zone, bedtime, wakeTime]);
 
   const flexMins = sleepRes?.goal?.bedtime_flex_minutes;
-  const weekData = [5, -10, 30, -5, 60, 45, 10];
+
+  const goalHoursToday = useMemo(
+    () => estimateSleepGoalHoursForToday(sleepRes, zone),
+    [sleepRes, zone],
+  );
+
+  const gaugeHours = checkinSummary?.rolling_7d.avg_time_in_bed_hours ?? currentSleepHours;
+  const gaugeGoal = goalHoursToday || sleepGoal;
+
+  const quickQuality =
+    checkinSummary?.last_night?.quality_pct ??
+    checkinSummary?.rolling_7d.avg_quality_pct ??
+    null;
+  const quickAvgBed =
+    checkinSummary?.last_night?.time_in_bed_hours ??
+    checkinSummary?.rolling_7d.avg_time_in_bed_hours ??
+    null;
+  const quickDebt = checkinSummary?.rolling_7d.sleep_debt_hours ?? null;
+  const consistencyFromLogs = checkinSummary?.rolling_7d.consistency_pct ?? consistencyScore;
+  const weekVsGoal = useMemo((): (number | null)[] => {
+    if (checkinSummary?.rolling_7d?.days?.length === 7) {
+      return checkinSummary.rolling_7d.days.map((d) => d.vs_goal_minutes);
+    }
+    return [null, null, null, null, null, null, null];
+  }, [checkinSummary]);
 
   return (
     <div>
@@ -101,18 +156,39 @@ const SleepPage = () => {
         {/* Quick stats */}
         <section className="grid grid-cols-3 gap-2">
           <div className="rounded-2xl border border-border/50 bg-card px-3 py-3 text-center shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Goal</p>
-            <p className="mt-1 font-display text-lg font-bold text-foreground">{sleepGoal}h</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Goal (tonight)</p>
+            <p className="mt-1 font-display text-lg font-bold text-foreground">
+              {Math.round(gaugeGoal * 10) / 10}h
+            </p>
           </div>
           <div className="rounded-2xl border border-border/50 bg-card px-3 py-3 text-center shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Avg (demo)</p>
-            <p className="mt-1 font-display text-lg font-bold text-foreground">{currentSleepHours}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Quality</p>
+            <p className="mt-1 font-display text-lg font-bold text-foreground tabular-nums">
+              {formatQualityPct(quickQuality)}
+            </p>
           </div>
           <div className="rounded-2xl border border-border/50 bg-card px-3 py-3 text-center shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Rhythm</p>
-            <p className="mt-1 font-display text-lg font-bold text-foreground">{consistencyScore}%</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Debt (7d)</p>
+            <p className="mt-1 font-display text-lg font-bold text-foreground tabular-nums">
+              {formatDebtHours(quickDebt)}
+            </p>
           </div>
         </section>
+        <p className="text-[11px] text-muted-foreground text-center -mt-2 px-1">
+          Time in bed (7d avg):{' '}
+          <span className="font-medium text-foreground tabular-nums">
+            {formatHoursHoursMinutes(
+              checkinSummary?.rolling_7d.avg_time_in_bed_hours ?? quickAvgBed,
+            )}
+          </span>
+          {checkinSummary?.rolling_7d.nights_logged != null ? (
+            <span>
+              {' '}
+              · {checkinSummary.rolling_7d.nights_logged} night
+              {checkinSummary.rolling_7d.nights_logged === 1 ? '' : 's'} logged
+            </span>
+          ) : null}
+        </p>
 
         {token ? <SleepInsightsCharts token={token} zone={zone} /> : null}
 
@@ -134,20 +210,24 @@ const SleepPage = () => {
         <section className="relative rounded-2xl border border-border/50 bg-card px-6 py-8 text-center shadow-sm">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Rest balance</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Demo average vs your {sleepGoal}h goal—connect a tracker later for live data.
+            7-night average time in bed vs tonight&apos;s goal from your schedule.
           </p>
           <div className="relative mx-auto mt-4 flex justify-center">
-            <SleepGauge hours={currentSleepHours} goal={sleepGoal} size={200} />
+            <SleepGauge hours={gaugeHours} goal={gaugeGoal} size={200} />
           </div>
         </section>
 
-        <ConsistencyScoreCard score={consistencyScore} weekData={weekData} />
+        <ConsistencyScoreCard
+          score={consistencyFromLogs}
+          weekData={weekVsGoal}
+          subtitle="Minutes above/below goal (logged nights)"
+        />
 
         <section className="flex items-center gap-2 rounded-xl border border-dashed border-border/70 bg-muted/30 px-4 py-3">
           <Sparkles className="h-4 w-4 shrink-0 text-accent" />
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Tips below are educational—not personalized to your night yet. Use the calendar to protect wind-down and
-            sleep blocks.
+            Quality, debt, and the gauge use your morning check-ins when you log. Tips below are general—use the
+            calendar to protect wind-down and sleep blocks.
           </p>
         </section>
 

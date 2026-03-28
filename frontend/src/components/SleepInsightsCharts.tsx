@@ -25,7 +25,7 @@ type ApiLog = {
   wake_up_count: number;
   mood: string;
   factors: string[] | null;
-  latency_minutes: number;
+  latency_minutes: number | null;
 };
 
 const MOOD_SCORE: Record<string, number> = {
@@ -132,7 +132,10 @@ const SleepInsightsCharts = ({ token, zone, className }: SleepInsightsChartsProp
           wake: Math.floor(num(row.wake_up_count)),
           moodScore,
           moodLabel: moodScore != null ? MOOD_LABELS[moodScore] ?? row.mood : row.mood,
-          latency: Math.floor(num(row.latency_minutes)),
+          latency:
+            row.latency_minutes != null && Number.isFinite(num(row.latency_minutes))
+              ? Math.floor(num(row.latency_minutes))
+              : null,
         };
       }),
     [logs, zone],
@@ -304,7 +307,9 @@ const SleepInsightsCharts = ({ token, zone, className }: SleepInsightsChartsProp
 
       <div className={cardClass}>
         <p className="text-sm font-medium text-foreground">Time to fall asleep</p>
-        <p className="text-xs text-muted-foreground mb-2">Minutes (bucket you selected)</p>
+        <p className="text-xs text-muted-foreground mb-2">
+          Minutes when you chose an answer; nights left blank are skipped
+        </p>
         <ChartContainer config={latencyConfig} className={cn(chartBox, 'aspect-[16/9] max-h-[260px]')}>
           <BarChart data={timeline} margin={{ left: 4, right: 8, top: 8, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" className="stroke-border/40" />

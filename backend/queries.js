@@ -1204,31 +1204,50 @@ export async function upsertDailySleepLog(userId, payload) {
     latency_minutes,
   } = payload;
 
-  const result = await pool.query(
-    `INSERT INTO "DailySleepLog"
-      (user_id, log_date, sleep_goal_hours, actual_sleep_hours, wake_up_count, mood, factors, latency_minutes)
-     VALUES ($1, $2::date, $3, $4, $5, $6, $7::text[], $8)
-     ON CONFLICT (user_id, log_date) DO UPDATE SET
-       sleep_goal_hours = EXCLUDED.sleep_goal_hours,
-       actual_sleep_hours = EXCLUDED.actual_sleep_hours,
-       wake_up_count = EXCLUDED.wake_up_count,
-       mood = EXCLUDED.mood,
-       factors = EXCLUDED.factors,
-       latency_minutes = EXCLUDED.latency_minutes,
-       updated_at = CURRENT_TIMESTAMP
-     RETURNING *`,
-    [
-      userId,
-      log_date,
-      Number(sleep_goal_hours),
-      Number(actual_sleep_hours),
-      Math.max(0, Math.floor(Number(wake_up_count) || 0)),
-      String(mood),
-      Array.isArray(factors) ? factors.map(String) : [],
-      Math.max(0, Math.floor(Number(latency_minutes) || 0)),
-    ]
-  );
-  return result.rows[0];
+  const latResolved =
+    latency_minutes == null || latency_minutes === ''
+      ? null
+      : Math.max(0, Math.floor(Number(latency_minutes)));
+
+  const baseParams = [
+    userId,
+    log_date,
+    Number(sleep_goal_hours),
+    Number(actual_sleep_hours),
+    Math.max(0, Math.floor(Number(wake_up_count) || 0)),
+    String(mood),
+    Array.isArray(factors) ? factors.map(String) : [],
+  ];
+
+  const run = (lat) =>
+    pool.query(
+      `INSERT INTO "DailySleepLog"
+        (user_id, log_date, sleep_goal_hours, actual_sleep_hours, wake_up_count, mood, factors, latency_minutes)
+       VALUES ($1, $2::date, $3, $4, $5, $6, $7::text[], $8)
+       ON CONFLICT (user_id, log_date) DO UPDATE SET
+         sleep_goal_hours = EXCLUDED.sleep_goal_hours,
+         actual_sleep_hours = EXCLUDED.actual_sleep_hours,
+         wake_up_count = EXCLUDED.wake_up_count,
+         mood = EXCLUDED.mood,
+         factors = EXCLUDED.factors,
+         latency_minutes = EXCLUDED.latency_minutes,
+         updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [...baseParams, lat],
+    );
+
+  try {
+    const result = await run(latResolved);
+    return result.rows[0];
+  } catch (err) {
+    // Older DBs: latency_minutes NOT NULL (before migration 010). Retry once with 30 so the log still saves.
+    const code = err && typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : '';
+    if (latResolved == null && code === '23502') {
+      const retry = await run(30);
+      return retry.rows[0];
+    }
+    throw err;
+  }
 }
 
 export async function listDailySleepLogsInRange(userId, fromDate, toDate) {

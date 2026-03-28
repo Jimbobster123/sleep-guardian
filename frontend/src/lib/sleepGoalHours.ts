@@ -92,3 +92,78 @@ export function formatPreviousNightBedWakeRange(summary: SummaryLike, zone: stri
   }
   return null;
 }
+
+/**
+ * Planned bed (yesterday evening) and wake (this morning) in the user's zone, from the window for last night.
+ * Falls back to fixed_duration + optional wake time, then to goal hours anchored at 7:00 wake so sliders still work.
+ */
+export function getPreviousNightPlanBedWakeDateTimes(
+  summary: SummaryLike,
+  zone: string,
+): { bed: DateTime; wake: DateTime } | null {
+  if (summary == null) return null;
+
+  const today = DateTime.now().setZone(zone).startOf('day');
+  const yesterday = today.minus({ days: 1 });
+  const yesterdayDow = apiDayOfWeek(yesterday);
+  const win = summary.windows?.find((w) => Number(w.day_of_week) === yesterdayDow);
+  const g = summary.goal;
+
+  let bedM: number | null = null;
+  let wakeM: number | null = null;
+
+  if (win?.start_time && win?.end_time) {
+    bedM = parseTimeToMinutes(win.start_time);
+    wakeM = parseTimeToMinutes(win.end_time);
+  } else if (g?.target_bedtime && g?.target_wake_time) {
+    bedM = parseTimeToMinutes(g.target_bedtime);
+    wakeM = parseTimeToMinutes(g.target_wake_time);
+  }
+
+  if (bedM != null && wakeM != null) {
+    const bed = yesterday.set({
+      hour: Math.floor(bedM / 60),
+      minute: bedM % 60,
+      second: 0,
+      millisecond: 0,
+    });
+    let wake = today.set({
+      hour: Math.floor(wakeM / 60),
+      minute: wakeM % 60,
+      second: 0,
+      millisecond: 0,
+    });
+    if (wake <= bed) {
+      wake = wake.plus({ days: 1 });
+    }
+    return { bed, wake };
+  }
+
+  // fixed_duration: span from target_sleep_minutes, wake wall time or 7:00
+  if (g?.goal_type === 'fixed_duration' && g.target_sleep_minutes != null && Number(g.target_sleep_minutes) > 0) {
+    const wakeFromGoal = parseTimeToMinutes(g.target_wake_time);
+    const wake = today.set({
+      hour: wakeFromGoal != null ? Math.floor(wakeFromGoal / 60) : 7,
+      minute: wakeFromGoal != null ? wakeFromGoal % 60 : 0,
+      second: 0,
+      millisecond: 0,
+    });
+    const bed = wake.minus({ minutes: Number(g.target_sleep_minutes) });
+    return { bed, wake };
+  }
+
+  // Last resort: use last night’s goal hours with a default 7:00 wake anchor (enables bed/wake sliders)
+  const hours = estimateSleepGoalHoursForLastNight(summary, zone);
+  if (!Number.isFinite(hours) || hours <= 0 || hours > 20) return null;
+
+  const wake = today.set({ hour: 7, minute: 0, second: 0, millisecond: 0 });
+  const bed = wake.minus({ hours: hours });
+  return { bed, wake };
+}
+
+/** Hours between two instants (handles overnight). */
+export function hoursBetweenBedAndWake(bed: DateTime, wake: DateTime): number {
+  let h = wake.diff(bed, 'hours').hours;
+  if (!Number.isFinite(h) || h < 0) h += 24;
+  return Math.round(Math.min(24, Math.max(0, h)) * 4) / 4;
+}

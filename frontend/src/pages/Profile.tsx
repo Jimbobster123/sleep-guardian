@@ -17,8 +17,9 @@ import { ApiError, apiJson } from "@/lib/api";
 import { toast } from "@/components/ui/sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { useApp } from "@/contexts/AppContext";
+import { useSleepCheckIn } from "@/contexts/SleepCheckInContext";
 import { useTheme } from "@/contexts/ThemeContext";
-import { LogOut, Zap, Sun, Moon } from "lucide-react";
+import { LogOut, Zap, Sun, Moon, ClipboardList } from "lucide-react";
 import { TIMEZONE_OPTIONS } from "@/lib/timezones";
 
 type SleepGoalResponse = {
@@ -54,6 +55,13 @@ type ReminderDraft = {
   enabled: boolean;
 };
 
+type OnboardingOKR = {
+  percentage: number;
+  numerator_count: number;
+  denominator_count: number;
+  interval_days: number;
+};
+
 const TEXT_REMINDERS_AVAILABLE = false;
 
 function getErrorMessage(err: unknown, fallback: string) {
@@ -62,6 +70,7 @@ function getErrorMessage(err: unknown, fallback: string) {
 
 export default function Profile() {
   const { token, user, refreshMe, logout } = useAuth();
+  const { openModal: openSleepCheckIn } = useSleepCheckIn();
   const { crisisMode, setCrisisMode } = useApp();
   const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState(user?.email || "");
@@ -82,6 +91,9 @@ export default function Profile() {
   const [reminderMinutes, setReminderMinutes] = useState("30");
   const [reminderEnabled, setReminderEnabled] = useState(false);
   const [reminderInitial, setReminderInitial] = useState<ReminderDraft | null>(null);
+  const [onboardingOkr, setOnboardingOkr] = useState<OnboardingOKR | null>(null);
+  const [loadingOkr, setLoadingOkr] = useState(true);
+  const [okrError, setOkrError] = useState<string | null>(null);
 
   useEffect(() => {
     setEmail(user?.email || "");
@@ -106,6 +118,37 @@ export default function Profile() {
     })();
     return () => {
       cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) {
+      setOnboardingOkr(null);
+      setLoadingOkr(false);
+      setOkrError(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingOkr(true);
+    setOkrError(null);
+    const loadOkr = async () => {
+      try {
+        const data = await apiJson<OnboardingOKR>("/api/okr/onboarding-sleep-goal-reminder-7d", { token });
+        if (cancelled) return;
+        setOnboardingOkr(data);
+        setOkrError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setOkrError(err instanceof Error ? err.message : "Failed to load OKR");
+      } finally {
+        if (!cancelled) setLoadingOkr(false);
+      }
+    };
+    void loadOkr();
+    const intervalId = window.setInterval(() => void loadOkr(), 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
     };
   }, [token]);
 
@@ -335,6 +378,18 @@ export default function Profile() {
           </button>
         </div>
 
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <h2 className="text-sm font-semibold text-foreground mb-2">Morning sleep log</h2>
+          <p className="text-xs text-muted-foreground mb-3">
+            Log how last night went — quality, time in bed, and what affected sleep. This updates your home
+            suggestions.
+          </p>
+          <Button type="button" variant="default" size="sm" className="gap-2" onClick={() => openSleepCheckIn()}>
+            <ClipboardList className="w-4 h-4" />
+            Open sleep log
+          </Button>
+        </div>
+
         <div
           className={`rounded-xl p-4 border shadow-sm ${
             crisisMode ? "bg-crisis-light border-crisis/30 crisis-glow" : "bg-card border-border/50"
@@ -559,6 +614,36 @@ export default function Profile() {
               {reminderBusy ? "Saving..." : "Save Changes"}
             </Button>
           </div>
+        </div>
+
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">OKR: Sleep setup</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Objective: reduce the burden of managing schedules around sleep
+              </p>
+              <p className="text-xs text-muted-foreground">Target: 80%</p>
+            </div>
+            <div className="text-right shrink-0">
+              {loadingOkr || !onboardingOkr ? (
+                <p className="text-2xl font-display font-bold text-foreground">—</p>
+              ) : (
+                <p className="text-2xl font-display font-bold text-foreground">
+                  {Math.round(onboardingOkr.percentage)}%
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                first {onboardingOkr?.interval_days ?? 7} days
+              </p>
+            </div>
+          </div>
+          {okrError ? <p className="text-xs text-red-500 mt-2">{okrError}</p> : null}
+          {onboardingOkr ? (
+            <p className="text-xs text-muted-foreground mt-2">
+              ({onboardingOkr.numerator_count}/{onboardingOkr.denominator_count}) users met the criteria
+            </p>
+          ) : null}
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">

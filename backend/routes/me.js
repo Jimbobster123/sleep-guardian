@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { requireAuth } from '../middleware/auth.js';
 import { parseIcs } from '../import/ics.js';
 import { buildScheduleSuggestions } from '../schedule/suggestions.js';
+import { buildSleepCheckinSummary } from '../sleep/checkinSummary.js';
 import {
   createOrUpdateSleepGoal,
   createTask,
@@ -432,6 +433,17 @@ router.get('/daily-sleep-logs', requireAuth, async (req, res) => {
   }
 });
 
+router.get('/sleep-checkin-summary', requireAuth, async (req, res) => {
+  try {
+    const tz =
+      req.user.timezone && String(req.user.timezone).trim() ? req.user.timezone : null;
+    const summary = await buildSleepCheckinSummary(req.user.user_id, tz);
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load sleep check-in summary', details: err.message });
+  }
+});
+
 router.put('/daily-sleep-log', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
@@ -469,9 +481,16 @@ router.put('/daily-sleep-log', requireAuth, async (req, res) => {
       }
     }
 
-    const latency_minutes = Math.floor(Number(body.latency_minutes));
-    if (!DAILY_SLEEP_LATENCY_MINUTES.has(latency_minutes)) {
-      return res.status(400).json({ error: 'latency_minutes must be one of 15, 30, 45, 60' });
+    const rawLat = body.latency_minutes;
+    let latency_minutes = null;
+    if (rawLat != null && rawLat !== '') {
+      const n = Math.floor(Number(rawLat));
+      if (!DAILY_SLEEP_LATENCY_MINUTES.has(n)) {
+        return res.status(400).json({
+          error: 'latency_minutes must be null or one of 15, 30, 45, 60 when provided',
+        });
+      }
+      latency_minutes = n;
     }
 
     const log = await upsertDailySleepLog(req.user.user_id, {
