@@ -130,3 +130,19 @@ export function fromDatetimeLocalInputToApi(value: string, targetZone: string): 
   if (!dt.isValid) return '';
   return dt.setZone(targetZone).toFormat(SQL_FORMAT);
 }
+
+/**
+ * Format Postgres TIME values like "23:00:00" or "23:00" for display (12-hour clock).
+ */
+export function formatWallTime12h(time: string | null | undefined): string | null {
+  if (time == null || String(time).trim() === '') return null;
+  const parts = String(time).trim().split(':');
+  const h = Number(parts[0]);
+  const m = Number(parts[1] ?? 0);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  const hour24 = ((Math.floor(h) % 24) + 24) % 24;
+  const minute = Math.min(59, Math.max(0, Math.floor(m)));
+  const dt = DateTime.fromObject({ year: 2000, month: 1, day: 1, hour: hour24, minute, second: 0 });
+  if (!dt.isValid) return null;
+  return dt.toFormat('h:mm a');
+}

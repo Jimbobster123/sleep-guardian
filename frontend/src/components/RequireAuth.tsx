@@ -10,7 +10,9 @@ function AuthLoadingShell({ detail }: { detail?: string }) {
       <p className="text-xs text-muted-foreground max-w-md leading-relaxed">
         If the screen stays blank, open the browser devtools Console for errors. Ensure the API is running
         (<span className="font-mono text-foreground">npm run dev:backend</span> from repo root). API:{" "}
-        <span className="font-mono text-foreground break-all">{API_BASE_URL}</span>
+        <span className="font-mono text-foreground break-all">
+          {API_BASE_URL || "same origin /api (Vite → :5001)"}
+        </span>
       </p>
     </div>
   );

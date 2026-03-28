@@ -68,11 +68,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (token) await refreshMe();
       } catch (err) {
         // Only clear the session on an actual auth failure.
-        // For transient API/DB errors, keep the token so RequireAuth can retry.
+        // For transient API/DB errors, keep the token and any user already set
+        // (e.g. right after login) so a flaky /api/me does not wipe the session.
         if (err instanceof ApiError && err.status === 401) {
           setSession(null);
-          setUser(null);
-        } else {
           setUser(null);
         }
       } finally {

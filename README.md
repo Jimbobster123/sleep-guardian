@@ -28,6 +28,12 @@ cd sleep-guardian
 ```
 
 ### 2. Install dependencies
+From the repository root (recommended):
+```bash
+npm run install-all
+```
+
+Or separately:
 ```bash
 cd frontend && npm install
 cd ../backend && npm install
@@ -85,28 +91,43 @@ TWILIO_FROM_PHONE=+15555550123
 
 ## Running the App
 
-You need two terminals open at the same time, both started **from inside the correct folder**.
+You need the API and the Vite dev server running at the same time.
 
-**Terminal 1 — Backend (from project root):**
+### Option A — One command (from repo root)
 ```bash
-cd backend
-npm run dev
+npm run dev:all
 ```
+This runs the backend and frontend together (`concurrently`).
+
+### Option B — Two terminals
+
+**Terminal 1 — Backend (from repo root):**
+```bash
+npm run dev:backend
+```
+Or: `cd backend && npm run dev`
+
 Expected output:
 ```
 ✅ Successfully connected to PostgreSQL database
-🚀 Server is running on http://localhost:5001
+Server is running on http://localhost:5001
 ```
 
-**Terminal 2 — Frontend (from project root):**
+**Terminal 2 — Frontend (from repo root):**
 ```bash
-cd frontend
 npm run dev
 ```
+Or: `cd frontend && npm run dev`
 
 Open **http://localhost:8080/** in your browser. If that does not load, try **http://127.0.0.1:8080/**.
 
-Verify the backend is healthy: **http://localhost:5001/api/db-health**
+### Frontend API URL (local dev)
+
+- By default, **local dev** uses same-origin **`/api`**: Vite proxies requests to `http://127.0.0.1:5001` (see `frontend/vite.config.ts`). You usually do **not** need `VITE_API_BASE_URL` for day-to-day work.
+- To call a different API origin, set **`VITE_API_BASE_URL`** (see `frontend/.env.example`). Optional: **`VITE_DEV_API_PROXY`** changes the proxy target for `/api`.
+- **Production builds** should set **`VITE_API_BASE_URL`** to your deployed API unless the UI is served from the same host as the API.
+
+Verify the backend: **http://localhost:5001/api/health** or **http://localhost:5001/api/db-health**
 
 ---
 
@@ -150,13 +171,31 @@ lsof -ti :5001 | xargs kill
 cd backend && npm install
 ```
 
-**Signup/login returns 500:**
-- Check the backend terminal for the exact error
-- If it says `column "..." does not exist`, run the missing column command from Step 3
+**Frontend says it cannot reach the API:**
+- Ensure the backend is running (`npm run dev:backend` or `npm run dev:all`).
+- In dev, the UI uses the Vite **`/api` proxy** by default (no CORS friction). If you set **`VITE_API_BASE_URL`** in `frontend/.env`, remove it to use the proxy, or point it at a running API.
+- CORS: for LAN testing (e.g. `http://192.168.x.x:8080`) the backend allows private-network origins in non-production; you can also list origins in **`FRONTEND_URL`** in `backend/.env`.
+
+**Signup/login returns 500 or `/api/me` says `Auth error`:**
+- Check the backend terminal for the exact Postgres error.
+- If you see **`column "phone_number" does not exist`** (or similar) on `"User"`, run **migration 008** from Step 3. The backend also tolerates a missing **`User.phone_number`** column for core auth when migrations have not been applied yet, but you should still run migrations for full profile and reminders.
+
+**Bedtime reminder worker errors in logs:**
+- Reminder polling logs failures instead of exiting the process; fix the underlying DB (e.g. missing **`Reminder.method`**) by running migrations **007** and **008** in order.
 
 **Frontend not loading:**
-- Make sure both backend and frontend terminals are running
-- Check http://localhost:5001/api/db-health first to confirm the backend is up
+- Make sure both backend and frontend are running
+- Check http://localhost:5001/api/health first to confirm the API is up
+
+---
+
+## Home screen (dashboard)
+
+The home page shows, in order:
+
+1. **Sleep** — tonight’s window (from your sleep goal when available), streak, and placeholder “last night” stats; opens the Sleep tab.
+2. **Tasks** — priority tasks and tasks due today; opens the full task list.
+3. **Calendar** — today’s mini timeline and upcoming events; opens the calendar.
 
 ---
 

@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import pool from '../db.js';
-import { createSession, createUser, getUserByEmail, revokeSession } from '../queries.js';
+import { createSession, getUserByEmail, revokeSession, userPhoneNumberColumnExists } from '../queries.js';
 
 const router = express.Router();
 
@@ -41,23 +41,41 @@ router.post('/signup', async (req, res) => {
     await client.query('BEGIN');
 
     const existing = await getUserByEmail(normalizedEmail);
-    if (existing) return res.status(409).json({ error: 'Email already in use' });
+    if (existing) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Email already in use' });
+    }
 
     const password_hash = await hashPassword(password);
-    const userInsert = await client.query(
-      `INSERT INTO "User" (email, password_hash, first_name, last_name, phone_number, timezone)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING user_id, email, first_name, last_name, phone_number, timezone, created_at`,
-      [
-        normalizedEmail,
-        password_hash,
-        firstName?.trim?.() ? firstName : null,
-        lastName?.trim?.() ? lastName : null,
-        phoneNumber?.trim?.() ? phoneNumber : null,
-        timezone?.trim?.() ? timezone : null,
-      ]
-    );
+    const hasPhoneCol = await userPhoneNumberColumnExists();
+    const userInsert = hasPhoneCol
+      ? await client.query(
+          `INSERT INTO "User" (email, password_hash, first_name, last_name, phone_number, timezone)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING user_id, email, first_name, last_name, phone_number, timezone, created_at`,
+          [
+            normalizedEmail,
+            password_hash,
+            firstName?.trim?.() ? firstName : null,
+            lastName?.trim?.() ? lastName : null,
+            phoneNumber?.trim?.() ? phoneNumber : null,
+            timezone?.trim?.() ? timezone : null,
+          ]
+        )
+      : await client.query(
+          `INSERT INTO "User" (email, password_hash, first_name, last_name, timezone)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING user_id, email, first_name, last_name, timezone, created_at`,
+          [
+            normalizedEmail,
+            password_hash,
+            firstName?.trim?.() ? firstName : null,
+            lastName?.trim?.() ? lastName : null,
+            timezone?.trim?.() ? timezone : null,
+          ]
+        );
     const user = userInsert.rows[0];
+    if (!hasPhoneCol && user) user.phone_number = null;
 
     const session_token = newSessionToken();
     const expires_at = sessionExpiryDate();

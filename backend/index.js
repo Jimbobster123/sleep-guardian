@@ -36,12 +36,32 @@ function isLocalDevBrowserOrigin(origin) {
   }
 }
 
+/** Allow Vite --host / LAN URLs (e.g. http://192.168.x.x:8080) during local development. */
+function isPrivateLanDevOrigin(origin) {
+  try {
+    const u = new URL(origin);
+    const h = u.hostname;
+    const parts = h.split('.').map((p) => Number(p));
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+    const [a, b] = parts;
+    if (a === 10) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+const isProduction = process.env.NODE_ENV === 'production';
+
 app.use(
   cors({
     origin(origin, callback) {
       if (!origin) return callback(null, true);
       if (frontendOrigins.includes(origin)) return callback(null, true);
       if (isLocalDevBrowserOrigin(origin)) return callback(null, true);
+      if (!isProduction && isPrivateLanDevOrigin(origin)) return callback(null, true);
       return callback(new Error(`CORS blocked origin: ${origin}`));
     },
     allowedHeaders: ['Content-Type', 'Authorization'],

@@ -3,6 +3,10 @@
 ALTER TABLE "User"
   ADD COLUMN IF NOT EXISTS phone_number VARCHAR(32);
 
+-- method may be missing if DB was created before migration 007; keep 008 safe to run alone.
+ALTER TABLE "Reminder"
+  ADD COLUMN IF NOT EXISTS method VARCHAR(32);
+
 ALTER TABLE "Reminder"
   ADD COLUMN IF NOT EXISTS last_sent_at TIMESTAMP;
 
