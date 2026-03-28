@@ -412,6 +412,7 @@ export default function Profile() {
             {["Late night", "Early morning", "Traveling", "Sick"].map((label) => (
               <button
                 key={label}
+                type="button"
                 className="text-xs bg-muted text-foreground rounded-full px-3 py-1.5 hover:bg-accent/10 hover:text-accent transition-colors"
               >
                 {label}
@@ -452,16 +453,17 @@ export default function Profile() {
               </p>
             </div>
             <div className="space-y-1">
-              <Label>First</Label>
-              <Input value={first} onChange={(e) => setFirst(e.target.value)} />
+              <Label htmlFor="profile-first-name">First</Label>
+              <Input id="profile-first-name" value={first} onChange={(e) => setFirst(e.target.value)} />
             </div>
             <div className="space-y-1">
-              <Label>Last</Label>
-              <Input value={last} onChange={(e) => setLast(e.target.value)} />
+              <Label htmlFor="profile-last-name">Last</Label>
+              <Input id="profile-last-name" value={last} onChange={(e) => setLast(e.target.value)} />
             </div>
             <div className="space-y-1">
-              <Label>Timezone</Label>
+              <Label htmlFor="profile-timezone">Timezone</Label>
               <select
+                id="profile-timezone"
                 className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                 value={tz}
                 onChange={(e) => setTz(e.target.value)}
@@ -599,7 +601,9 @@ export default function Profile() {
             Export your Google Calendar as an <span className="font-medium">.ics</span> file and import it here.
           </p>
           <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <Label htmlFor="ics-upload" className="sr-only">Import .ics file</Label>
             <input
+              id="ics-upload"
               type="file"
               accept=".ics,text/calendar"
               disabled={icsBusy}
