@@ -58,7 +58,13 @@ export async function apiJson<T>(
   const data = text ? safeJsonParse(text) : null;
 
   if (!res.ok) {
-    const msg = (data && typeof data === "object" && "error" in data && String((data as any).error)) || res.statusText;
+    const raw = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+    const base =
+      (raw && "error" in raw && String(raw.error)) || res.statusText;
+    const details = raw && "details" in raw && raw.details != null && String(raw.details).trim() !== ""
+      ? String(raw.details).trim()
+      : "";
+    const msg = details ? `${base}: ${details}` : base;
     throw new ApiError(msg, res.status, data);
   }
   return data as T;

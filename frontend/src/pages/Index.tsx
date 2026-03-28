@@ -3,6 +3,7 @@ import TaskItem from '@/components/TaskItem';
 import EmotionalCheckIn from '@/components/EmotionalCheckIn';
 import { useApp } from '@/contexts/AppContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSleepCheckIn } from '@/contexts/SleepCheckInContext';
 import { apiJson } from '@/lib/api';
 import { isTaskPastDue } from '@/lib/taskOverdue';
 import {
@@ -78,6 +79,7 @@ function getEventStyle(source?: string | null) {
 
 const Home = () => {
   const { token, user } = useAuth();
+  const { todayLog: todaySleepLog, loadingLog: loadingSleepLog, openModal: openSleepCheckIn } = useSleepCheckIn();
   const { bedtime, wakeTime, streak } = useApp();
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -200,6 +202,22 @@ const Home = () => {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (loadingSleepLog) return;
+    if (todaySleepLog) return;
+    const dismissKey = `luna_sleep_checkin_dismiss_${todayStr}`;
+    const autoKey = `luna_sleep_checkin_auto_${todayStr}`;
+    try {
+      if (sessionStorage.getItem(dismissKey)) return;
+      if (sessionStorage.getItem(autoKey)) return;
+      sessionStorage.setItem(autoKey, '1');
+    } catch {
+      return;
+    }
+    openSleepCheckIn();
+  }, [token, todayStr, loadingSleepLog, todaySleepLog, openSleepCheckIn]);
 
   useEffect(() => {
     if (!token) return;

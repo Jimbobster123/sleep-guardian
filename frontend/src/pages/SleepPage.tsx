@@ -2,6 +2,7 @@ import PageHeader from '@/components/PageHeader';
 import ConsistencyScoreCard from '@/components/ConsistencyScoreCard';
 import SleepGauge from '@/components/SleepGauge';
 import SleepInsightCard from '@/components/SleepInsightCard';
+import SleepInsightsCharts from '@/components/SleepInsightsCharts';
 import { useApp } from '@/contexts/AppContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
@@ -112,6 +113,8 @@ const SleepPage = () => {
             <p className="mt-1 font-display text-lg font-bold text-foreground">{consistencyScore}%</p>
           </div>
         </section>
+
+        {token ? <SleepInsightsCharts token={token} zone={zone} /> : null}
 
         {crisisMode && (
           <section className="rounded-2xl border border-crisis/25 bg-crisis-light p-4">

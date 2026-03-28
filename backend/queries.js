@@ -1180,3 +1180,65 @@ export async function getOnboardingSleepGoalReminderPercentage({ intervalDays = 
     interval_days: intervalDays,
   };
 }
+
+export async function getDailySleepLogByDate(userId, logDate) {
+  const result = await pool.query(
+    `SELECT daily_sleep_log_id, user_id, log_date, sleep_goal_hours, actual_sleep_hours,
+            wake_up_count, mood, factors, latency_minutes, created_at, updated_at
+     FROM "DailySleepLog"
+     WHERE user_id = $1 AND log_date = $2::date
+     LIMIT 1`,
+    [userId, logDate]
+  );
+  return result.rows[0] || null;
+}
+
+export async function upsertDailySleepLog(userId, payload) {
+  const {
+    log_date,
+    sleep_goal_hours,
+    actual_sleep_hours,
+    wake_up_count,
+    mood,
+    factors,
+    latency_minutes,
+  } = payload;
+
+  const result = await pool.query(
+    `INSERT INTO "DailySleepLog"
+      (user_id, log_date, sleep_goal_hours, actual_sleep_hours, wake_up_count, mood, factors, latency_minutes)
+     VALUES ($1, $2::date, $3, $4, $5, $6, $7::text[], $8)
+     ON CONFLICT (user_id, log_date) DO UPDATE SET
+       sleep_goal_hours = EXCLUDED.sleep_goal_hours,
+       actual_sleep_hours = EXCLUDED.actual_sleep_hours,
+       wake_up_count = EXCLUDED.wake_up_count,
+       mood = EXCLUDED.mood,
+       factors = EXCLUDED.factors,
+       latency_minutes = EXCLUDED.latency_minutes,
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [
+      userId,
+      log_date,
+      Number(sleep_goal_hours),
+      Number(actual_sleep_hours),
+      Math.max(0, Math.floor(Number(wake_up_count) || 0)),
+      String(mood),
+      Array.isArray(factors) ? factors.map(String) : [],
+      Math.max(0, Math.floor(Number(latency_minutes) || 0)),
+    ]
+  );
+  return result.rows[0];
+}
+
+export async function listDailySleepLogsInRange(userId, fromDate, toDate) {
+  const result = await pool.query(
+    `SELECT daily_sleep_log_id, user_id, log_date, sleep_goal_hours, actual_sleep_hours,
+            wake_up_count, mood, factors, latency_minutes, created_at, updated_at
+     FROM "DailySleepLog"
+     WHERE user_id = $1 AND log_date >= $2::date AND log_date <= $3::date
+     ORDER BY log_date ASC`,
+    [userId, fromDate, toDate],
+  );
+  return result.rows;
+}

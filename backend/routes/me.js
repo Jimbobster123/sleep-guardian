@@ -29,6 +29,9 @@ import {
   upsertImportedCalendarEvent,
   upsertSleepWindow,
   upsertTaskCalendarEvent,
+  getDailySleepLogByDate,
+  upsertDailySleepLog,
+  listDailySleepLogsInRange,
 } from '../queries.js';
 import { pushLocalEventToGoogle, deleteGoogleEventForLocal } from '../google/calendar.js';
 
@@ -46,6 +49,10 @@ function isNullableTimeString(value) {
 }
 
 const REPEAT_TYPES = new Set(['none', 'daily', 'weekdays', 'weekly']);
+
+const DAILY_SLEEP_MOODS = new Set(['exhausted', 'tired', 'okay', 'good', 'energized']);
+const DAILY_SLEEP_FACTORS = new Set(['Caffeine', 'Alcohol', 'Heavy Meal', 'Screen Time', 'Exercise', 'Stress']);
+const DAILY_SLEEP_LATENCY_MINUTES = new Set([15, 30, 45, 60]);
 
 function parseDateInput(value) {
   if (!value || typeof value !== 'string') return null;
@@ -380,6 +387,105 @@ router.put('/sleep-goal', requireAuth, async (req, res) => {
     res.json({ goal, windows: upserted.length ? upserted : await getSleepWindows(goal.sleep_goal_id) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update sleep goal', details: err.message });
+  }
+});
+
+router.get('/daily-sleep-log', requireAuth, async (req, res) => {
+  try {
+    const date = req.query.date != null ? String(req.query.date).trim() : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'date query must be YYYY-MM-DD' });
+    }
+    const log = await getDailySleepLogByDate(req.user.user_id, date);
+    res.json({ log });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch daily sleep log', details: err.message });
+  }
+});
+
+router.get('/daily-sleep-logs', requireAuth, async (req, res) => {
+  try {
+    const from = req.query.from != null ? String(req.query.from).trim() : '';
+    const to = req.query.to != null ? String(req.query.to).trim() : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({ error: 'from query must be YYYY-MM-DD' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ error: 'to query must be YYYY-MM-DD' });
+    }
+    if (from > to) {
+      return res.status(400).json({ error: 'from must be on or before to' });
+    }
+    const fromMs = Date.parse(`${from}T00:00:00Z`);
+    const toMs = Date.parse(`${to}T00:00:00Z`);
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+      return res.status(400).json({ error: 'Invalid date range' });
+    }
+    const spanDays = Math.ceil((toMs - fromMs) / 86400000) + 1;
+    if (spanDays > 366) {
+      return res.status(400).json({ error: 'Date range cannot exceed 366 days' });
+    }
+    const logs = await listDailySleepLogsInRange(req.user.user_id, from, to);
+    res.json({ logs });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch daily sleep logs', details: err.message });
+  }
+});
+
+router.put('/daily-sleep-log', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const date = typeof body.date === 'string' ? body.date.trim() : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
+    const sleep_goal_hours = Number(body.sleep_goal_hours);
+    const actual_sleep_hours = Number(body.actual_sleep_hours);
+    if (!Number.isFinite(sleep_goal_hours) || sleep_goal_hours < 0 || sleep_goal_hours > 24) {
+      return res.status(400).json({ error: 'sleep_goal_hours must be a number between 0 and 24' });
+    }
+    if (!Number.isFinite(actual_sleep_hours) || actual_sleep_hours < 0 || actual_sleep_hours > 24) {
+      return res.status(400).json({ error: 'actual_sleep_hours must be a number between 0 and 24' });
+    }
+
+    const wake_up_count = Math.floor(Number(body.wake_up_count));
+    if (!Number.isInteger(wake_up_count) || wake_up_count < 0 || wake_up_count > 99) {
+      return res.status(400).json({ error: 'wake_up_count must be an integer from 0 to 99' });
+    }
+
+    const mood = typeof body.mood === 'string' ? body.mood.trim().toLowerCase() : '';
+    if (!DAILY_SLEEP_MOODS.has(mood)) {
+      return res.status(400).json({ error: 'mood must be one of exhausted, tired, okay, good, energized' });
+    }
+
+    if (!Array.isArray(body.factors)) {
+      return res.status(400).json({ error: 'factors must be an array of strings' });
+    }
+    const factors = body.factors.map((x) => String(x).trim()).filter(Boolean);
+    for (const f of factors) {
+      if (!DAILY_SLEEP_FACTORS.has(f)) {
+        return res.status(400).json({ error: `Invalid factor: ${f}` });
+      }
+    }
+
+    const latency_minutes = Math.floor(Number(body.latency_minutes));
+    if (!DAILY_SLEEP_LATENCY_MINUTES.has(latency_minutes)) {
+      return res.status(400).json({ error: 'latency_minutes must be one of 15, 30, 45, 60' });
+    }
+
+    const log = await upsertDailySleepLog(req.user.user_id, {
+      log_date: date,
+      sleep_goal_hours,
+      actual_sleep_hours,
+      wake_up_count,
+      mood,
+      factors,
+      latency_minutes,
+    });
+    res.json({ log });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save daily sleep log', details: err.message });
   }
 });
 

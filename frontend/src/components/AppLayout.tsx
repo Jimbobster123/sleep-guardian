@@ -1,7 +1,9 @@
 import { ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Home, CheckSquare, CalendarDays, Moon, User } from 'lucide-react';
+import { Home, CheckSquare, CalendarDays, Moon, User, ClipboardList } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { useSleepCheckIn } from '@/contexts/SleepCheckInContext';
 
 const tabs = [
   { path: '/', icon: Home, label: 'Home' },
@@ -15,6 +17,8 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { crisisMode } = useApp();
+  const { token } = useAuth();
+  const { openModal: openSleepLog } = useSleepCheckIn();
   const hideNav =
     location.pathname.startsWith('/login') ||
     location.pathname.startsWith('/signup') ||
@@ -57,6 +61,18 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
                     </button>
                   );
                 })}
+                {token ? (
+                  <button
+                    type="button"
+                    onClick={() => openSleepLog()}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-muted-foreground hover:text-foreground hover:bg-muted/50`}
+                    aria-label="Today's sleep log"
+                    title="Today's sleep log"
+                  >
+                    <ClipboardList className="w-4 h-4" />
+                    <span className="text-sm font-medium hidden md:inline">Log</span>
+                  </button>
+                ) : null}
               </nav>
             </div>
           </div>
