@@ -1,94 +1,166 @@
 import PageHeader from '@/components/PageHeader';
-import SleepGauge from '@/components/SleepGauge';
 import ConsistencyScoreCard from '@/components/ConsistencyScoreCard';
+import SleepGauge from '@/components/SleepGauge';
 import SleepInsightCard from '@/components/SleepInsightCard';
 import { useApp } from '@/contexts/AppContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { apiJson } from '@/lib/api';
+import { effectiveTimeZone, formatWallTime12h } from '@/lib/calendarTime';
 import nightSky from '@/assets/night-sky-header.jpg';
+import { DateTime } from 'luxon';
+import { Moon, Shield, Sparkles } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+type SleepGoalSummary = {
+  goal: {
+    goal_type?: string;
+    target_bedtime: string | null;
+    target_wake_time: string | null;
+    target_sleep_minutes?: number | null;
+    bedtime_flex_minutes?: number | null;
+  } | null;
+  windows: Array<{ day_of_week: number; start_time: string; end_time: string }>;
+};
+
+function apiDayOfWeek(dt: DateTime): number {
+  return dt.weekday === 7 ? 0 : dt.weekday;
+}
 
 const SleepPage = () => {
-  const { currentSleepHours, sleepGoal, consistencyScore, crisisMode } = useApp();
+  const { token, user } = useAuth();
+  const navigate = useNavigate();
+  const { currentSleepHours, sleepGoal, consistencyScore, crisisMode, bedtime, wakeTime, streak } = useApp();
+  const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
+  const [sleepRes, setSleepRes] = useState<SleepGoalSummary | null>(null);
 
-  const weekData = [5, -10, 30, -5, 60, 45, 10]; // deviation in minutes from target bedtime
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiJson<SleepGoalSummary>('/api/me/sleep-goal', { token });
+        if (!cancelled) setSleepRes(data);
+      } catch {
+        if (!cancelled) setSleepRes(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const tonightLine = useMemo(() => {
+    const now = DateTime.now().setZone(zone);
+    const win = sleepRes?.windows?.find((w) => Number(w.day_of_week) === apiDayOfWeek(now));
+    const g = sleepRes?.goal;
+    if (win) {
+      const a = formatWallTime12h(win.start_time);
+      const b = formatWallTime12h(win.end_time);
+      if (a && b) return `${a} – ${b}`;
+    }
+    if (g?.target_bedtime || g?.target_wake_time) {
+      const a = formatWallTime12h(g.target_bedtime);
+      const b = formatWallTime12h(g.target_wake_time);
+      if (a && b) return `${a} – ${b}`;
+      if (a) return `Target bedtime ${a}`;
+      if (b) return `Target wake ${b}`;
+    }
+    return `${bedtime} – ${wakeTime}`;
+  }, [sleepRes, zone, bedtime, wakeTime]);
+
+  const flexMins = sleepRes?.goal?.bedtime_flex_minutes;
+  const weekData = [5, -10, 30, -5, 60, 45, 10];
 
   return (
     <div>
       <PageHeader title="Sleep" compact />
 
-      <div className="px-5 -mt-2 space-y-4 pb-6">
-        {/* Sleep Gauge */}
-        <div className="bg-card rounded-xl p-6 shadow-sm border border-border/50 flex flex-col items-center">
-          <div className="relative">
-            <SleepGauge hours={currentSleepHours} goal={sleepGoal} size={180} />
-          </div>
-          <p className="text-sm font-medium text-foreground mt-2">07:00–11:00PM</p>
-          <div className="flex items-center gap-6 mt-4">
-            <div className="text-center">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Average</p>
-              <p className="text-lg font-display font-bold text-foreground">6.75 <span className="text-xs font-normal text-muted-foreground">hours</span></p>
+      <div className="space-y-5 px-5 pb-10 pt-1">
+        {/* Hero */}
+        <section className="relative overflow-hidden rounded-3xl border border-border/30 shadow-md">
+          <img src={nightSky} alt="" className="h-44 w-full object-cover md:h-52" />
+          <div className="night-gradient absolute inset-0 opacity-80" />
+          <div className="absolute inset-0 flex flex-col justify-end p-5 md:p-6">
+            <div className="flex items-center gap-2 text-primary-foreground/90">
+              <Moon className="h-5 w-5" />
+              <span className="text-xs font-semibold uppercase tracking-wider">Tonight</span>
             </div>
-            <div className="w-px h-8 bg-border" />
-            <div className="text-center">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Jan 30 – Feb 5</p>
-              <div className="flex items-end gap-0.5 mt-1 justify-center">
-                {[5.5, 7, 8, 6, 4.5, 7.5, 8.5].map((h, i) => (
-                  <div
-                    key={i}
-                    className={`w-3 rounded-sm ${h >= 7 ? 'bg-accent' : h >= 5 ? 'bg-warning' : 'bg-destructive/60'}`}
-                    style={{ height: `${(h / 9) * 32}px` }}
-                  />
-                ))}
-              </div>
-            </div>
+            <h1 className="mt-1 font-display text-2xl font-semibold text-primary-foreground md:text-3xl">
+              {tonightLine}
+            </h1>
+            <p className="mt-2 max-w-lg text-sm text-primary-foreground/85">
+              {flexMins != null
+                ? `${flexMins} min wind-down before bed · ${streak}-day streak`
+                : `${streak}-day streak · stay gentle with yourself`}
+            </p>
           </div>
-        </div>
+        </section>
+
+        {/* Quick stats */}
+        <section className="grid grid-cols-3 gap-2">
+          <div className="rounded-2xl border border-border/50 bg-card px-3 py-3 text-center shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Goal</p>
+            <p className="mt-1 font-display text-lg font-bold text-foreground">{sleepGoal}h</p>
+          </div>
+          <div className="rounded-2xl border border-border/50 bg-card px-3 py-3 text-center shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Avg (demo)</p>
+            <p className="mt-1 font-display text-lg font-bold text-foreground">{currentSleepHours}</p>
+          </div>
+          <div className="rounded-2xl border border-border/50 bg-card px-3 py-3 text-center shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Rhythm</p>
+            <p className="mt-1 font-display text-lg font-bold text-foreground">{consistencyScore}%</p>
+          </div>
+        </section>
 
         {crisisMode && (
-          <div className="bg-crisis-light border border-crisis/20 rounded-xl p-4">
-            <p className="text-sm font-medium text-crisis mb-2">⚡ Crisis Recovery Tips</p>
-            <div className="space-y-2 text-xs text-foreground">
-              <p>💤 20-min power nap: between 1–3 PM</p>
-              <p>🔄 90-min sleep cycle: if you can only sleep short, aim for 1.5h or 3h</p>
-              <p>🎯 Streak penalties relaxed during crisis mode</p>
-            </div>
-          </div>
+          <section className="rounded-2xl border border-crisis/25 bg-crisis-light p-4">
+            <p className="flex items-center gap-2 text-sm font-semibold text-crisis">
+              <Shield className="h-4 w-4" />
+              Crisis recovery
+            </p>
+            <ul className="mt-2 list-inside list-disc space-y-1 text-xs text-foreground">
+              <li>Short nap 1–3 PM if you&apos;re crashing (about 20 minutes).</li>
+              <li>Prefer 1.5h or 3h sleeps if you can&apos;t get a full night—full cycles help.</li>
+              <li>Streak pressure is relaxed; focus on steady wake time when you can.</li>
+            </ul>
+          </section>
         )}
 
-        {/* Sleep Insights Banner */}
-        <div className="relative rounded-xl overflow-hidden h-24">
-          <img src={nightSky} alt="" className="w-full h-full object-cover" />
-          <div className="absolute inset-0 night-gradient opacity-70" />
-          <div className="absolute inset-0 flex items-center justify-center">
-            <h2 className="text-xl font-display font-semibold text-primary-foreground italic">Sleep Insights</h2>
+        {/* Gauge */}
+        <section className="relative rounded-2xl border border-border/50 bg-card px-6 py-8 text-center shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Rest balance</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Demo average vs your {sleepGoal}h goal—connect a tracker later for live data.
+          </p>
+          <div className="relative mx-auto mt-4 flex justify-center">
+            <SleepGauge hours={currentSleepHours} goal={sleepGoal} size={200} />
           </div>
-        </div>
+        </section>
 
-        {/* Consistency Score */}
         <ConsistencyScoreCard score={consistencyScore} weekData={weekData} />
 
-        {/* Personal Insights */}
-        <SleepInsightCard
-          title="Tuesday Impact"
-          description="On Tuesday you slept 4h → task completion dropped 40%. Your IS 455 assignment took 2x longer than usual."
-          personal
-        />
+        <section className="flex items-center gap-2 rounded-xl border border-dashed border-border/70 bg-muted/30 px-4 py-3">
+          <Sparkles className="h-4 w-4 shrink-0 text-accent" />
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Tips below are educational—not personalized to your night yet. Use the calendar to protect wind-down and
+            sleep blocks.
+          </p>
+        </section>
 
-        <SleepInsightCard
-          title="Optimal Sleep Range"
-          description="Around 7–9 hours of sleep per night is linked with the best academic performance for most students."
-          actionLabel="Go to Calendar"
-        />
-
-        <SleepInsightCard
-          title="Sleep Builds Memory"
-          description="During sleep, your brain consolidates what you studied, helping you remember and apply information later."
-          actionLabel="Go to Calendar"
-        />
-
-        <SleepInsightCard
-          title="Caffeine Curfew"
-          description="Caffeine later in the day can make it harder to fall asleep and stay asleep, even if you don't feel 'wired.'"
-          actionLabel="Go to Calendar"
-        />
+        <div className="space-y-3">
+          <SleepInsightCard
+            title="Why sleep consistency matters"
+            description="A steady sleep window helps mood, focus, and memory. Small shifts beat perfection—aim for “close enough” most nights."
+            personal
+          />
+          <SleepInsightCard
+            title="Caffeine curfew"
+            description="Late caffeine can delay sleep onset even when you don’t feel wired. Consider cutting off after early afternoon on rough weeks."
+            actionLabel="Open calendar"
+            onAction={() => navigate('/calendar')}
+          />
+        </div>
       </div>
     </div>
   );

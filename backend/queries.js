@@ -49,6 +49,26 @@ async function recurrenceSeriesIdColumnExists() {
   return recurrenceSeriesIdColumnExistsCache;
 }
 
+let userPhoneNumberColumnExistsCache = null;
+/** True if `"User".phone_number` exists (migration 008). Older DBs omit this column. */
+export async function userPhoneNumberColumnExists() {
+  if (userPhoneNumberColumnExistsCache != null) return userPhoneNumberColumnExistsCache;
+  try {
+    const result = await pool.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'User'
+         AND column_name = 'phone_number'
+       LIMIT 1`
+    );
+    userPhoneNumberColumnExistsCache = result.rows.length > 0;
+  } catch {
+    userPhoneNumberColumnExistsCache = false;
+  }
+  return userPhoneNumberColumnExistsCache;
+}
+
 // Get all tasks for a user
 export async function getUserTasks(userId) {
   try {
@@ -334,9 +354,12 @@ export async function deleteTaskCalendarEvents(userId, taskId) {
 // Get all users
 export async function getAllUsers() {
   try {
-    const result = await pool.query(
-      'SELECT user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id FROM "User" ORDER BY created_at DESC'
-    );
+    const withPhone = await userPhoneNumberColumnExists();
+    const cols = withPhone
+      ? 'user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id'
+      : 'user_id, email, first_name, last_name, timezone, google_calendar_id';
+    const result = await pool.query(`SELECT ${cols} FROM "User" ORDER BY created_at DESC`);
+    if (!withPhone) result.rows.forEach((r) => { r.phone_number = null; });
     return result.rows;
   } catch (err) {
     console.error('Error fetching users:', err);
@@ -347,11 +370,14 @@ export async function getAllUsers() {
 // Get user by ID
 export async function getUserById(userId) {
   try {
-    const result = await pool.query(
-      'SELECT user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id FROM "User" WHERE user_id = $1',
-      [userId]
-    );
-    return result.rows[0];
+    const withPhone = await userPhoneNumberColumnExists();
+    const cols = withPhone
+      ? 'user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id'
+      : 'user_id, email, first_name, last_name, timezone, google_calendar_id';
+    const result = await pool.query(`SELECT ${cols} FROM "User" WHERE user_id = $1`, [userId]);
+    const row = result.rows[0];
+    if (row && !withPhone) row.phone_number = null;
+    return row;
   } catch (err) {
     console.error('Error fetching user:', err);
     throw err;
@@ -498,23 +524,32 @@ export async function updateTaskStatus(taskId, userId, status) {
 }
 
 export async function getUserByEmail(email) {
-  const result = await pool.query(
-    'SELECT user_id, email, password_hash, first_name, last_name, phone_number, timezone, google_calendar_id FROM "User" WHERE email = $1',
-    [email]
-  );
-  return result.rows[0];
+  const withPhone = await userPhoneNumberColumnExists();
+  const cols = withPhone
+    ? 'user_id, email, password_hash, first_name, last_name, phone_number, timezone, google_calendar_id'
+    : 'user_id, email, password_hash, first_name, last_name, timezone, google_calendar_id';
+  const result = await pool.query(`SELECT ${cols} FROM "User" WHERE email = $1`, [email]);
+  const row = result.rows[0];
+  if (row && !withPhone) row.phone_number = null;
+  return row;
 }
 
 export async function updateUserGoogleIntegration(userId, { google_refresh_token, google_calendar_id }) {
+  const withPhone = await userPhoneNumberColumnExists();
+  const returning = withPhone
+    ? 'RETURNING user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id'
+    : 'RETURNING user_id, email, first_name, last_name, timezone, google_calendar_id';
   const result = await pool.query(
     `UPDATE "User"
      SET google_refresh_token = COALESCE($2, google_refresh_token),
          google_calendar_id = COALESCE($3, google_calendar_id)
      WHERE user_id = $1
-     RETURNING user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id`,
+     ${returning}`,
     [userId, google_refresh_token || null, google_calendar_id || null]
   );
-  return result.rows[0];
+  const row = result.rows[0];
+  if (row && !withPhone) row.phone_number = null;
+  return row;
 }
 
 export async function createUser({ email, password_hash, first_name, last_name, timezone }) {
@@ -547,8 +582,12 @@ export async function revokeSession(sessionToken) {
 }
 
 export async function getUserBySessionToken(sessionToken) {
+  const withPhone = await userPhoneNumberColumnExists();
+  const nameAndTz = withPhone
+    ? 'u.first_name, u.last_name, u.phone_number, u.timezone'
+    : 'u.first_name, u.last_name, u.timezone';
   const result = await pool.query(
-    `SELECT u.user_id, u.email, u.first_name, u.last_name, u.phone_number, u.timezone,
+    `SELECT u.user_id, u.email, ${nameAndTz},
             u.google_refresh_token, u.google_calendar_id
      FROM "AuthSession" s
      JOIN "User" u ON u.user_id = s.user_id
@@ -557,29 +596,49 @@ export async function getUserBySessionToken(sessionToken) {
        AND s.expires_at > CURRENT_TIMESTAMP`,
     [sessionToken]
   );
-  return result.rows[0];
+  const row = result.rows[0];
+  if (row && !withPhone) row.phone_number = null;
+  return row;
 }
 
 export async function updateUserProfile(userId, { email, first_name, last_name, phone_number, timezone }) {
+  const withPhone = await userPhoneNumberColumnExists();
+  if (withPhone) {
+    const result = await pool.query(
+      `UPDATE "User"
+       SET email = COALESCE($2, email),
+           first_name = COALESCE($3, first_name),
+           last_name = COALESCE($4, last_name),
+           phone_number = COALESCE($5, phone_number),
+           timezone = COALESCE($6, timezone)
+       WHERE user_id = $1
+       RETURNING user_id, email, first_name, last_name, phone_number, timezone`,
+      [userId, asNullIfEmpty(email), asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(phone_number), asNullIfEmpty(timezone)]
+    );
+    return result.rows[0];
+  }
   const result = await pool.query(
     `UPDATE "User"
      SET email = COALESCE($2, email),
          first_name = COALESCE($3, first_name),
          last_name = COALESCE($4, last_name),
-         phone_number = COALESCE($5, phone_number),
-         timezone = COALESCE($6, timezone)
+         timezone = COALESCE($5, timezone)
      WHERE user_id = $1
-     RETURNING user_id, email, first_name, last_name, phone_number, timezone`,
-    [userId, asNullIfEmpty(email), asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(phone_number), asNullIfEmpty(timezone)]
+     RETURNING user_id, email, first_name, last_name, timezone`,
+    [userId, asNullIfEmpty(email), asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(timezone)]
   );
-  return result.rows[0];
+  const row = result.rows[0];
+  if (row) row.phone_number = null;
+  return row;
 }
 
 export async function getBedtimeReminderSettings(userId) {
+  const withPhone = await userPhoneNumberColumnExists();
+  const phoneSelect = withPhone ? 'u.phone_number,' : 'NULL::varchar AS phone_number,';
   const result = await pool.query(
     `SELECT
        u.email,
-       u.phone_number,
+       ${phoneSelect}
        r.reminder_id,
        r.type,
        r.method,
@@ -624,14 +683,24 @@ export async function upsertBedtimeReminderSettings(
   try {
     await client.query('BEGIN');
 
-    const userResult = await client.query(
-      `UPDATE "User"
-       SET email = COALESCE($2, email),
-           phone_number = $3
-       WHERE user_id = $1
-       RETURNING user_id, email, first_name, last_name, phone_number, timezone`,
-      [userId, asNullIfEmpty(email), asNullIfEmpty(phone_number)]
-    );
+    const withPhone = await userPhoneNumberColumnExists();
+    const userResult = withPhone
+      ? await client.query(
+          `UPDATE "User"
+           SET email = COALESCE($2, email),
+               phone_number = $3
+           WHERE user_id = $1
+           RETURNING user_id, email, first_name, last_name, phone_number, timezone`,
+          [userId, asNullIfEmpty(email), asNullIfEmpty(phone_number)]
+        )
+      : await client.query(
+          `UPDATE "User"
+           SET email = COALESCE($2, email)
+           WHERE user_id = $1
+           RETURNING user_id, email, first_name, last_name, timezone`,
+          [userId, asNullIfEmpty(email)]
+        );
+    if (!withPhone && userResult.rows[0]) userResult.rows[0].phone_number = null;
 
     const existingReminder = await client.query(
       `SELECT reminder_id, last_sent_at
@@ -693,6 +762,8 @@ export async function upsertBedtimeReminderSettings(
 }
 
 export async function getActiveBedtimeReminders() {
+  const withPhone = await userPhoneNumberColumnExists();
+  const phoneSelect = withPhone ? 'u.phone_number' : 'NULL::varchar AS phone_number';
   const result = await pool.query(
     `SELECT
        r.reminder_id,
@@ -702,7 +773,7 @@ export async function getActiveBedtimeReminders() {
        r.enabled,
        r.last_sent_at,
        u.email,
-       u.phone_number,
+       ${phoneSelect},
        u.first_name,
        u.timezone,
        sg.sleep_goal_id,

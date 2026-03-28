@@ -7,6 +7,7 @@ import { apiJson } from '@/lib/api';
 import { isTaskPastDue } from '@/lib/taskOverdue';
 import {
   effectiveTimeZone,
+  formatWallTime12h,
   parseApiTimestamp,
   parseApiTimestampToDate,
 } from '@/lib/calendarTime';
@@ -54,6 +55,20 @@ type OnboardingOKR = {
   interval_days: number;
 };
 
+type SleepGoalSummary = {
+  goal: {
+    goal_type?: string;
+    target_bedtime: string | null;
+    target_wake_time: string | null;
+    bedtime_flex_minutes?: number | null;
+  } | null;
+  windows: Array<{ day_of_week: number; start_time: string; end_time: string }>;
+};
+
+function apiDayOfWeek(dt: DateTime): number {
+  return dt.weekday === 7 ? 0 : dt.weekday;
+}
+
 function getEventStyle(source?: string | null) {
   if (source === 'task_planned') return 'bg-accent/15 border border-accent/30 text-foreground';
   if (source === 'task_due') return 'bg-accent/25 border border-accent/40 text-foreground';
@@ -63,7 +78,7 @@ function getEventStyle(source?: string | null) {
 
 const Home = () => {
   const { token, user } = useAuth();
-  const { bedtime, streak } = useApp();
+  const { bedtime, wakeTime, streak } = useApp();
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadingTasks, setLoadingTasks] = useState(true);
@@ -74,6 +89,8 @@ const Home = () => {
   const [loadingOkr, setLoadingOkr] = useState(true);
   const [okrError, setOkrError] = useState<string | null>(null);
 
+  const [sleepRes, setSleepRes] = useState<SleepGoalSummary | null>(null);
+
   const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const { todayStr, tomorrowStr, todayLabel } = useMemo(() => {
     const now = DateTime.now().setZone(zone);
@@ -83,6 +100,31 @@ const Home = () => {
       todayLabel: now.toFormat('EEEE, MMM d'),
     };
   }, [zone]);
+
+  const sleepTonightLine = useMemo(() => {
+    const now = DateTime.now().setZone(zone);
+    const win = sleepRes?.windows?.find((w) => Number(w.day_of_week) === apiDayOfWeek(now));
+    const g = sleepRes?.goal;
+    if (win) {
+      const a = formatWallTime12h(win.start_time);
+      const b = formatWallTime12h(win.end_time);
+      if (a && b) return `${a} – ${b}`;
+    }
+    if (g?.target_bedtime || g?.target_wake_time) {
+      const a = formatWallTime12h(g.target_bedtime);
+      const b = formatWallTime12h(g.target_wake_time);
+      if (a && b) return `${a} – ${b}`;
+      if (a) return `Bed ${a}`;
+      if (b) return `Wake ${b}`;
+    }
+    return bedtime;
+  }, [sleepRes, zone, bedtime]);
+
+  const windDownLine = useMemo(() => {
+    const m = sleepRes?.goal?.bedtime_flex_minutes;
+    if (m != null && m > 0) return `${m} min wind-down before bed`;
+    return null;
+  }, [sleepRes]);
 
   const [calEvents, setCalEvents] = useState<ApiCalendarEvent[]>([]);
   const [calLoading, setCalLoading] = useState(true);
@@ -142,6 +184,22 @@ const Home = () => {
       cancelled = true;
     };
   }, [token, todayStr, tomorrowStr]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiJson<SleepGoalSummary>('/api/me/sleep-goal', { token });
+        if (!cancelled) setSleepRes(data);
+      } catch {
+        if (!cancelled) setSleepRes(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;
@@ -208,7 +266,6 @@ const Home = () => {
     [timedRows, nowTick],
   );
 
-  /** Future-only window: ≥6h ahead, stretches to last upcoming event, capped at midnight. */
   const homeMiniTimeline = useMemo(() => {
     const SIX_H_MS = 6 * 60 * 60 * 1000;
     const viewStartMs = nowTick.getTime();
@@ -244,7 +301,6 @@ const Home = () => {
     }
 
     const hoursSpan = denom / 3_600_000;
-    /** ~56px per hour → roomy blocks; clamp so very long days don’t dominate. */
     const pxPerHour = 56;
     const heightPx = Math.min(720, Math.max(300, Math.ceil(hoursSpan * pxPerHour)));
 
@@ -328,32 +384,41 @@ const Home = () => {
       <PageHeader title="" compact />
 
       <div className="px-5 -mt-2 space-y-4 pb-6">
-        {/* Tonight's Plan */}
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-sleep-light flex items-center justify-center">
+        {/* Sleep — tonight, streak, last night, link to Sleep page */}
+        <button
+          type="button"
+          onClick={() => navigate('/sleep')}
+          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in hover:border-accent/30 transition-colors"
+        >
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-sm font-semibold text-foreground">Sleep</h2>
+            <span className="text-xs text-accent font-medium flex items-center gap-0.5">
+              View <ChevronRight className="w-3.5 h-3.5" />
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-full bg-sleep-light flex items-center justify-center shrink-0 dark:bg-sleep/25">
                 <Moon className="w-5 h-5 text-sleep" />
               </div>
-              <div>
-                <p className="text-lg font-display font-semibold text-foreground">{bedtime}</p>
-                <p className="text-xs text-muted-foreground">Bedtime</p>
+              <div className="min-w-0">
+                <p className="text-lg font-display font-semibold text-foreground truncate">
+                  {sleepTonightLine}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {windDownLine ?? `Wake target ${wakeTime}`}
+                </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 bg-muted rounded-full px-3 py-1.5">
-                <Flame className="w-4 h-4 text-warning" />
-                <span className="text-sm font-semibold text-foreground">{streak}</span>
-                <span className="text-xs text-muted-foreground">day streak</span>
-              </div>
+            <div className="flex items-center gap-1.5 bg-muted rounded-full px-3 py-1.5 shrink-0">
+              <Flame className="w-4 h-4 text-warning" />
+              <span className="text-sm font-semibold text-foreground">{streak}</span>
+              <span className="text-xs text-muted-foreground">day</span>
             </div>
           </div>
-        </div>
 
-        {/* Last Night Stats - moved under sleep goal */}
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Last Night</h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="mt-4 grid grid-cols-2 gap-3">
             <div className="text-center py-3 bg-muted/50 rounded-lg">
               <p className="text-2xl font-display font-bold text-foreground">87%</p>
               <p className="text-xs text-muted-foreground">sleep quality</p>
@@ -363,18 +428,14 @@ const Home = () => {
               <p className="text-xs text-muted-foreground">time in bed</p>
             </div>
           </div>
-        </div>
-
-        {/* Emotional Check-In */}
-        <div className="animate-fade-in-delay">
-          <EmotionalCheckIn />
-        </div>
+        </button>
 
         {/* Priority Tasks */}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay">
           <div className="flex justify-between items-center mb-3">
             <h2 className="text-sm font-semibold text-foreground">Priority</h2>
             <button
+              type="button"
               onClick={() => navigate('/tasks')}
               className="text-xs text-accent font-medium flex items-center gap-0.5"
             >
@@ -412,6 +473,7 @@ const Home = () => {
           <div className="flex justify-between items-center mb-3">
             <h2 className="text-sm font-semibold text-foreground">Today's Tasks</h2>
             <button
+              type="button"
               onClick={() => navigate('/tasks')}
               className="text-xs text-accent font-medium flex items-center gap-0.5"
             >
@@ -586,6 +648,11 @@ const Home = () => {
             </>
           )}
         </button>
+
+        {/* Emotional Check-In */}
+        <div className="animate-fade-in-delay-2">
+          <EmotionalCheckIn />
+        </div>
 
         {/* Onboarding OKR Metric */}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay-2">

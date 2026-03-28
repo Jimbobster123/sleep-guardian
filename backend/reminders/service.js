@@ -220,8 +220,11 @@ export function startBedtimeReminderService() {
     return;
   }
 
-  void processBedtimeReminders();
-  setInterval(() => {
-    void processBedtimeReminders();
-  }, REMINDER_POLL_MS);
+  const run = () =>
+    processBedtimeReminders().catch((err) => {
+      console.error('Bedtime reminder poll failed:', err);
+    });
+
+  run();
+  setInterval(run, REMINDER_POLL_MS);
 }

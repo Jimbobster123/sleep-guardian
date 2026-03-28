@@ -1,4 +1,12 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
+function resolveApiBaseUrl(): string {
+  const fromEnv = import.meta.env.VITE_API_BASE_URL;
+  if (fromEnv !== undefined && String(fromEnv).trim() !== "") return String(fromEnv).trim();
+  // Same-origin `/api/...` in dev: Vite proxies to the Express server (avoids CORS and mixed-origin issues).
+  if (import.meta.env.DEV) return "";
+  return "http://localhost:5001";
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 export class ApiError extends Error {
   status: number;
@@ -40,7 +48,9 @@ export async function apiJson<T>(
   } catch (e) {
     const hint =
       e instanceof TypeError
-        ? `Cannot reach the API (${API_BASE_URL}). Start the backend (e.g. npm run dev in /backend, port 5001) or set VITE_API_BASE_URL if it runs elsewhere.`
+        ? API_BASE_URL
+          ? `Cannot reach the API at ${API_BASE_URL}. Start the backend (npm run dev:backend from the repo root) or set VITE_API_BASE_URL.`
+          : `Cannot reach the API (dev proxy to port 5001). Start the backend with npm run dev:backend from the repo root, or set VITE_DEV_API_PROXY if it runs elsewhere.`
         : String(e);
     throw new ApiError(hint, 0, e);
   }
