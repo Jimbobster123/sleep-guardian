@@ -23,6 +23,8 @@ import {
   effectiveTimeZone,
   formatTimestampForApi,
   hourFloatInZone,
+  hourRowOverlapsSuggestedWindDown,
+  hourRowOverlapsWindDown,
   parseApiTimestamp,
   parseApiTimestampToDate,
   percentFromHourFloatFrom3am,
@@ -89,6 +91,7 @@ type SleepGoalResponse = {
   goal: {
     target_bedtime: string | null;
     target_wake_time: string | null;
+    bedtime_flex_minutes?: number | null;
   } | null;
   windows: Array<{
     day_of_week: number;
@@ -273,6 +276,16 @@ const CalendarPage = () => {
       source: 'saved' as const,
     };
   }, [windowForDay, sleep, suggestions]);
+
+  const windDownFlexMins = useMemo(
+    () => Math.max(0, Math.round(Number(sleep?.goal?.bedtime_flex_minutes ?? 0))),
+    [sleep?.goal?.bedtime_flex_minutes],
+  );
+
+  const suggestedBedDateTime = useMemo(() => {
+    if (!suggestions?.sleep_window?.start) return null;
+    return parseApiTimestamp(String(suggestions.sleep_window.start), zone);
+  }, [suggestions?.sleep_window?.start, zone]);
 
   // For overnight sleep windows (bedtime > wake time), early-morning hours
   // on the current calendar day belong to the previous day's "bedtime episode".
@@ -719,6 +732,13 @@ const CalendarPage = () => {
             <Moon className="w-3.5 h-3.5 inline mr-1 text-sleep" />
             <span className="font-medium">Sleep window protected:</span> {sleepTimes.label}. Scheduling here will trigger a gentle warning.
           </p>
+          {windDownFlexMins > 0 ? (
+            <p className="text-xs text-muted-foreground mt-1.5">
+              <span className="font-medium text-foreground/90">Wind-down</span> — the{' '}
+              {windDownFlexMins}-minute block before your goal bedtime is a lighter pink-purple band on the timeline
+              (sleep is the deeper blue-lavender).
+            </p>
+          ) : null}
         </div>
         )}
 
@@ -1195,12 +1215,35 @@ const CalendarPage = () => {
                   const inWakeWindow = hour >= Math.floor(wakeBoundaryHour) && hour < Math.floor(wakeBoundaryHour) + 1;
                   const isWakeRow = hour === Math.floor(wakeBoundaryHour);
                   const isBedRow = hour === Math.floor(sleepTimes.bedHour);
+                  const morningSleepTail = isSavedMode && inPrevEpisode;
+
+                  let inWindDown = false;
+                  if (windDownFlexMins > 0 && !morningSleepTail) {
+                    if (sleepTimes.source === 'suggested' && suggestedBedDateTime) {
+                      inWindDown = hourRowOverlapsSuggestedWindDown(
+                        dateStr,
+                        hour,
+                        zone,
+                        suggestedBedDateTime,
+                        windDownFlexMins,
+                      );
+                    } else if (sleepTimes.source === 'saved') {
+                      inWindDown = hourRowOverlapsWindDown(
+                        dateStr,
+                        hour,
+                        zone,
+                        sleepTimes.bedHour,
+                        windDownFlexMins,
+                      );
+                    }
+                  }
+
+                  const timelineBg =
+                    inSleepWindow ? 'sleep-window-bg' : inWindDown ? 'wind-down-bg' : inWakeWindow ? 'wake-window-bg' : '';
                   return (
                     <div
                       key={hour}
-                      className={`relative min-h-[3rem] border-b border-border/30 ${
-                        inSleepWindow ? 'sleep-window-bg' : inWakeWindow ? 'wake-window-bg' : ''
-                      }`}
+                      className={`relative min-h-[3rem] border-b border-border/30 ${timelineBg}`}
                     >
                       {isWakeRow && (
                         <>
@@ -1370,7 +1413,18 @@ const CalendarPage = () => {
                     const endH = hourFloatInZone(x.end, zone);
                     return startH < hourEnd && endH > hourStart;
                   });
-                  const bgStyles = inSleepWindow ? 'sleep-window-bg' : inWakeWindow ? 'wake-window-bg' : '';
+                  const weekMorningSleepTail = prevCrossesMidnight && hour < Math.floor(prevWakeHour);
+                  const inWindDownWeek =
+                    windDownFlexMins > 0 && !weekMorningSleepTail
+                      ? hourRowOverlapsWindDown(dayKey, hour, zone, bedHour, windDownFlexMins)
+                      : false;
+                  const bgStyles = inSleepWindow
+                    ? 'sleep-window-bg'
+                    : inWindDownWeek
+                      ? 'wind-down-bg'
+                      : inWakeWindow
+                        ? 'wake-window-bg'
+                        : '';
                   return (
                     <div
                       key={dayKey}

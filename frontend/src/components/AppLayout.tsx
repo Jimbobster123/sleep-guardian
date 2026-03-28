@@ -21,39 +21,46 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
     location.pathname.startsWith('/onboarding');
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background luna-app-shell">
       {/* Top navigation */}
       {!hideNav && (
-        <header className="sticky top-0 z-50 bg-header/95 backdrop-blur border-b border-border/50">
+        <header className="sticky top-0 z-50 border-b border-border/60 bg-header/90 backdrop-blur-md shadow-sm">
+          <div
+            className="h-0.5 w-full bg-gradient-to-r from-sleep/30 via-accent/25 to-consistency/30"
+            aria-hidden
+          />
           <div className="mx-auto w-full max-w-md md:max-w-5xl pl-2 pr-4 md:pl-3 md:pr-6 py-3">
             <div className="flex items-center justify-between gap-4">
               <button
+                type="button"
                 onClick={() => navigate('/')}
-                className="flex items-center gap-2"
+                className="flex min-h-[44px] min-w-[44px] items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                 aria-label="Go to Home"
               >
-                <Moon className="w-5 h-5 text-sleep" />
-                <div className="font-display font-semibold text-2xl text-foreground leading-none">Luna</div>
+                <Moon className="h-5 w-5 shrink-0 text-sleep" aria-hidden />
+                <div className="font-display text-2xl font-semibold leading-none text-foreground">
+                  Luna
+                </div>
               </button>
 
-              <nav className="flex items-center gap-1">
+              <nav className="flex flex-wrap items-center justify-end gap-1" aria-label="Main">
                 {tabs.map(({ path, icon: Icon, label }) => {
-                  // We'll show all tabs inline (including Menu) so the hamburger isn't needed in PageHeader.
                   const active = location.pathname === path;
                   return (
                     <button
                       key={path}
+                      type="button"
                       onClick={() => navigate(path)}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                      className={`flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-lg px-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background md:min-w-0 md:px-3 ${
                         active
-                          ? 'bg-accent/10 text-accent'
-                          : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                          ? 'bg-accent/15 text-accent shadow-sm'
+                          : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
                       }`}
                       aria-current={active ? 'page' : undefined}
+                      aria-label={label}
                     >
-                      <Icon className="w-4 h-4" />
-                      {/* Small screens: show icon-only to avoid wrapping/scrolling. */}
-                      <span className="text-sm font-medium hidden md:inline">{label}</span>
+                      <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                      <span className="hidden text-sm font-medium md:inline">{label}</span>
                     </button>
                   );
                 })}

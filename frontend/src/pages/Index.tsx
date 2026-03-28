@@ -1,3 +1,4 @@
+import HeroStarfield from '@/components/HeroStarfield';
 import TaskItem from '@/components/TaskItem';
 import EmotionalCheckIn from '@/components/EmotionalCheckIn';
 import { Button } from '@/components/ui/button';
@@ -473,25 +474,41 @@ const Home = () => {
   return (
     <div>
       <div className="px-5 -mt-2 space-y-4 pb-6">
-        {/* Hero — tonight window + goal */}
-        <section className="relative overflow-hidden rounded-3xl border border-border/30 shadow-md animate-fade-in">
-          <img src={nightSky} alt="" className="h-40 w-full object-cover md:h-48" />
-          <div className="night-gradient absolute inset-0 opacity-80" />
-          <div className="absolute bottom-5 right-5 md:bottom-6 md:right-6 flex items-center gap-1.5 rounded-full bg-primary-foreground/15 px-3 py-1.5 backdrop-blur-sm z-[2]">
-            <Flame className="w-4 h-4 text-amber-200" />
-            <span className="text-sm font-semibold text-primary-foreground">{streak}</span>
-            <span className="text-xs text-primary-foreground/80">day</span>
+        {/* Hero — tonight window + goal (decorative layers are aria-hidden for AT) */}
+        <section
+          className="relative overflow-hidden rounded-3xl border border-border/40 shadow-lg shadow-sleep/10 animate-fade-in"
+          aria-labelledby="home-hero-heading"
+        >
+          <img src={nightSky} alt="" className="h-40 w-full object-cover md:h-48" decoding="async" />
+          <div className="night-gradient absolute inset-0 opacity-85" aria-hidden />
+          <HeroStarfield />
+          <div className="luna-hero-aurora absolute inset-0 mix-blend-soft-light" aria-hidden />
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-[58%] bg-gradient-to-t from-black/55 via-black/20 to-transparent dark:from-black/60 dark:via-black/25"
+            aria-hidden
+          />
+          <div
+            className="absolute bottom-5 right-5 z-[4] flex max-w-[min(100%,11rem)] items-center gap-2 rounded-full border border-border/70 bg-card/95 px-3 py-2 shadow-md backdrop-blur-sm dark:border-border/80 dark:bg-card/95"
+            role="group"
+            aria-label={`${streak} day streak`}
+          >
+            <Flame className="h-4 w-4 shrink-0 text-warning" aria-hidden />
+            <span className="font-display text-lg font-bold tabular-nums text-foreground">{streak}</span>
+            <span className="text-xs font-medium text-muted-foreground">day streak</span>
           </div>
-          <div className="absolute inset-0 flex flex-col justify-end p-5 md:p-6 pr-24 md:pr-28">
+          <div className="absolute inset-0 z-[3] flex flex-col justify-end p-5 md:p-6 pr-[min(30%,11rem)]">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-primary-foreground/90">
-                <Moon className="h-5 w-5 shrink-0" />
+              <div className="flex items-center gap-2 text-primary-foreground">
+                <Moon className="h-5 w-5 shrink-0" aria-hidden />
                 <span className="text-xs font-semibold uppercase tracking-wider">Tonight</span>
               </div>
-              <h1 className="mt-1 font-display text-2xl font-semibold text-primary-foreground md:text-3xl leading-tight">
+              <h1
+                id="home-hero-heading"
+                className="mt-1 font-display text-2xl font-semibold leading-tight text-primary-foreground drop-shadow-sm md:text-3xl"
+              >
                 {sleepTonightLine}
               </h1>
-              <p className="mt-2 max-w-lg text-sm text-primary-foreground/85">
+              <p className="mt-2 max-w-lg text-sm leading-relaxed text-primary-foreground/95">
                 {windDownLine
                   ? `${windDownLine} · ${Math.round(tonightGoalHours * 10) / 10}h target`
                   : `${Math.round(tonightGoalHours * 10) / 10}h sleep goal · wake around ${wakeTime}`}
@@ -505,7 +522,7 @@ const Home = () => {
           role="link"
           tabIndex={0}
           aria-label="Sleep — open full sleep page"
-          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in hover:border-accent/40 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="luna-card-interactive w-full cursor-pointer p-4 text-left animate-fade-in"
           onClick={() => navigate('/sleep')}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -514,9 +531,9 @@ const Home = () => {
             }
           }}
         >
-          <div className="flex justify-between items-center mb-3">
+          <div className="mb-3 flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-foreground">Sleep</h2>
-            <ChevronRight className="w-4 h-4 text-accent shrink-0" aria-hidden />
+            <ChevronRight className="h-4 w-4 shrink-0 text-accent" aria-hidden />
           </div>
 
           <p className="text-xs text-muted-foreground mb-3">
@@ -605,10 +622,12 @@ const Home = () => {
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">
               Plan for today
             </p>
-            <ul className="space-y-2 text-xs text-foreground leading-relaxed">
+            <ul className="space-y-2 text-xs leading-relaxed text-foreground">
               {homeSuggestions.map((line, i) => (
                 <li key={i} className="flex gap-2">
-                  <span className="text-accent font-bold shrink-0">·</span>
+                  <span className="shrink-0 font-bold text-accent" aria-hidden>
+                    ·
+                  </span>
                   <span>{line}</span>
                 </li>
               ))}
@@ -642,7 +661,7 @@ const Home = () => {
           role="link"
           tabIndex={0}
           aria-label="Tasks — open tasks page"
-          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay hover:border-accent/40 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="luna-card-interactive w-full cursor-pointer p-4 text-left animate-fade-in-delay"
           onClick={() => navigate('/tasks')}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -651,14 +670,14 @@ const Home = () => {
             }
           }}
         >
-          <div className="flex justify-between items-start gap-2 mb-1">
+          <div className="mb-1 flex items-start justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold text-foreground">Tasks</h2>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
+              <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
                 Priority first, then planned or due time
               </p>
             </div>
-            <ChevronRight className="w-4 h-4 text-accent shrink-0 mt-0.5" aria-hidden />
+            <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
           </div>
           {loadingTasks ? (
             <p className="py-3 text-sm text-muted-foreground">Loading tasks...</p>
@@ -699,7 +718,7 @@ const Home = () => {
           role="link"
           tabIndex={0}
           aria-label="Calendar — open calendar page"
-          className="w-full text-left bg-card rounded-xl p-4 shadow-sm border border-border/50 animate-fade-in-delay-2 hover:border-accent/40 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="luna-card-interactive w-full cursor-pointer p-4 text-left animate-fade-in-delay-2"
           onClick={() => navigate('/calendar')}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -708,9 +727,9 @@ const Home = () => {
             }
           }}
         >
-          <div className="flex justify-between items-center mb-2">
+          <div className="mb-2 flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-foreground">Calendar</h2>
-            <ChevronRight className="w-4 h-4 text-accent shrink-0" aria-hidden />
+            <ChevronRight className="h-4 w-4 shrink-0 text-accent" aria-hidden />
           </div>
           <p className="text-[11px] text-muted-foreground mb-2">{todayLabel}</p>
 
