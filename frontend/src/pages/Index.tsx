@@ -1,6 +1,5 @@
 import HeroStarfield from '@/components/HeroStarfield';
 import TaskItem from '@/components/TaskItem';
-import EmotionalCheckIn from '@/components/EmotionalCheckIn';
 import { Button } from '@/components/ui/button';
 import { useApp } from '@/contexts/AppContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -20,6 +19,7 @@ import {
   writeDailyActionChoice,
 } from '@/lib/homeSleepSuggestions';
 import { estimateSleepGoalHoursForToday } from '@/lib/sleepGoalHours';
+import { streakDaysForUser } from '@/lib/streakDisplay';
 import type { SleepCheckinSummary } from '@/lib/sleepCheckinSummary';
 import {
   formatDebtHours,
@@ -29,7 +29,7 @@ import {
 import nightSky from '@/assets/night-sky-header.jpg';
 import { DateTime } from 'luxon';
 import { isToday } from 'date-fns';
-import { Moon, Flame, ChevronRight, ClipboardList } from 'lucide-react';
+import { Moon, Flame, ChevronRight, ClipboardList, Pencil } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from '@/components/ui/sonner';
@@ -117,8 +117,11 @@ function effectiveTodaySortMs(t: Task): number {
 
 const Home = () => {
   const { token, user } = useAuth();
+  const streakDays = streakDaysForUser(user);
+  const streakSubtext =
+    user?.streak_type === 'GOAL_MET' ? 'Goal Completion Streak' : 'Daily Log Streak';
   const { openModal: openSleepCheckIn } = useSleepCheckIn();
-  const { bedtime, wakeTime, streak } = useApp();
+  const { bedtime, wakeTime } = useApp();
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadingTasks, setLoadingTasks] = useState(true);
@@ -488,13 +491,29 @@ const Home = () => {
             aria-hidden
           />
           <div
-            className="absolute bottom-5 right-5 z-[4] flex max-w-[min(100%,11rem)] items-center gap-2 rounded-full border border-border/70 bg-card/95 px-3 py-2 shadow-md backdrop-blur-sm dark:border-border/80 dark:bg-card/95"
+            className="absolute bottom-5 right-5 z-[4] flex max-w-[min(100%,12.5rem)] flex-col gap-0.5 rounded-2xl border border-border/70 bg-card/95 px-3 py-2 shadow-md backdrop-blur-sm dark:border-border/80 dark:bg-card/95"
             role="group"
-            aria-label={`${streak} day streak`}
+            aria-label={`${streakDays} day streak, ${streakSubtext}`}
           >
-            <Flame className="h-4 w-4 shrink-0 text-warning" aria-hidden />
-            <span className="font-display text-lg font-bold tabular-nums text-foreground">{streak}</span>
-            <span className="text-xs font-medium text-muted-foreground">day streak</span>
+            <div className="flex items-center gap-2">
+              <Flame className="h-4 w-4 shrink-0 text-warning" aria-hidden />
+              <span className="font-display text-lg font-bold tabular-nums text-foreground">{streakDays}</span>
+              <span className="text-xs font-medium text-muted-foreground">day streak</span>
+            </div>
+            <div className="flex items-center justify-between gap-1 pl-6">
+              <span className="text-[10px] text-muted-foreground leading-tight">{streakSubtext}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate('/profile?focus=streak');
+                }}
+                className="shrink-0 rounded-md p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                aria-label="Edit streak settings in Profile"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            </div>
           </div>
           <div className="absolute inset-0 z-[3] flex flex-col justify-end p-5 md:p-6 pr-[min(30%,11rem)]">
             <div className="min-w-0">
@@ -862,10 +881,6 @@ const Home = () => {
           )}
         </div>
 
-        {/* Emotional Check-In */}
-        <div className="animate-fade-in-delay-2">
-          <EmotionalCheckIn />
-        </div>
       </div>
     </div>
   );

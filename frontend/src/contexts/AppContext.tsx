@@ -7,7 +7,6 @@ interface AppState {
   wakeTime: string;
   sleepGoal: number;
   currentSleepHours: number;
-  streak: number;
   consistencyScore: number;
   emotionalCheckIn: string | null;
   setEmotionalCheckIn: (v: string | null) => void;
@@ -32,7 +31,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     wakeTime: '7:00 AM',
     sleepGoal: 8,
     currentSleepHours: 6.75,
-    streak: 14,
     consistencyScore: 78,
     emotionalCheckIn,
     setEmotionalCheckIn,

@@ -64,7 +64,7 @@ app.use(
       if (!isProduction && isPrivateLanDevOrigin(origin)) return callback(null, true);
       return callback(new Error(`CORS blocked origin: ${origin}`));
     },
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Client-Timezone'],
   })
 );
 app.use(express.json());

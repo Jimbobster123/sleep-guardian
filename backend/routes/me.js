@@ -26,6 +26,7 @@ import {
   getBedtimeReminderSettings,
   upsertBedtimeReminderSettings,
   updateUserProfile,
+  updateUserStreakType,
   deleteTaskCalendarEvents,
   upsertImportedCalendarEvent,
   upsertSleepWindow,
@@ -34,9 +35,15 @@ import {
   upsertDailySleepLog,
   listDailySleepLogsInRange,
 } from '../queries.js';
+import { getMeUserPayload } from '../sleep/streak.js';
 import { pushLocalEventToGoogle, deleteGoogleEventForLocal } from '../google/calendar.js';
 
 const router = express.Router();
+
+function clientTimezoneHint(req) {
+  const h = req.get('X-Client-Timezone') || req.get('x-client-timezone');
+  return h && String(h).trim() ? String(h).trim() : undefined;
+}
 const TEXT_REMINDERS_AVAILABLE = false;
 
 const VALID_GOAL_TYPES = new Set(['fixed_bedtime', 'fixed_wake_time', 'fixed_duration']);
@@ -224,19 +231,51 @@ async function validateSchedule({ userId, start, end, excludeEventId, excludeTas
 }
 
 router.get('/', requireAuth, async (req, res) => {
-  res.json({ user: req.user });
+  try {
+    const user = await getMeUserPayload(req.user.user_id, clientTimezoneHint(req));
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ user });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load profile', details: err.message });
+  }
 });
 
 router.put('/profile', requireAuth, async (req, res) => {
   try {
     const { email, first_name, last_name, phone_number, timezone } = req.body || {};
-    const user = await updateUserProfile(req.user.user_id, { email, first_name, last_name, phone_number, timezone });
+    await updateUserProfile(req.user.user_id, { email, first_name, last_name, phone_number, timezone });
+    const user = await getMeUserPayload(req.user.user_id, clientTimezoneHint(req));
+    if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ user });
   } catch (err) {
     if (err?.code === '23505') {
       return res.status(409).json({ error: 'Email already in use' });
     }
     res.status(500).json({ error: 'Failed to update profile', details: err.message });
+  }
+});
+
+router.patch('/profile', requireAuth, async (req, res) => {
+  try {
+    const { streak_type } = req.body || {};
+    if (streak_type === undefined || streak_type === null) {
+      return res.status(400).json({ error: 'streak_type is required (RECORDING or GOAL_MET)' });
+    }
+    const s = String(streak_type).toUpperCase();
+    if (s !== 'RECORDING' && s !== 'GOAL_MET') {
+      return res.status(400).json({ error: 'streak_type must be RECORDING or GOAL_MET' });
+    }
+    const updated = await updateUserStreakType(req.user.user_id, s);
+    if (!updated) {
+      return res.status(503).json({
+        error: 'Streak settings are not available until the database migration for streak_type has been applied.',
+      });
+    }
+    const user = await getMeUserPayload(req.user.user_id, clientTimezoneHint(req));
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ user });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update streak settings', details: err.message });
   }
 });
 

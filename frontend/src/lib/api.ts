@@ -27,6 +27,12 @@ export async function apiJson<T>(
   const { token: _omit, ...init } = opts;
   const headers = new Headers(opts.headers || {});
   headers.set("Accept", "application/json");
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz && !headers.has("X-Client-Timezone")) headers.set("X-Client-Timezone", tz);
+  } catch {
+    /* ignore */
+  }
   if (!headers.has("Content-Type") && opts.body) {
     // Most calls send JSON. If a caller wants a different type (e.g. ICS), they pass Content-Type explicitly.
     const body: any = opts.body as any;

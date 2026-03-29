@@ -102,7 +102,7 @@ export function useSleepCheckIn() {
 }
 
 export function SleepCheckInProvider({ children }: { children: React.ReactNode }) {
-  const { token, user } = useAuth();
+  const { token, user, refreshMe } = useAuth();
   const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const todayStr = useMemo(() => DateTime.now().setZone(zone).toFormat('yyyy-MM-dd'), [zone]);
 
@@ -305,6 +305,7 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
       setIsOpen(false);
       toast.success('Sleep log saved');
       window.dispatchEvent(new CustomEvent('luna-sleep-checkin-saved'));
+      void refreshMe();
     } catch (e) {
       const msg =
         e instanceof ApiError
@@ -328,6 +329,7 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
     mood,
     factors,
     latency,
+    refreshMe,
   ]);
 
   const toggleFactor = (f: string) => {

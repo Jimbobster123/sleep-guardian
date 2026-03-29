@@ -148,3 +148,6 @@ CREATE TABLE IF NOT EXISTS "DailySleepLog" (
 );
 
 CREATE INDEX IF NOT EXISTS idx_daily_sleep_log_user_date ON "DailySleepLog"(user_id, log_date DESC);
+
+-- User streak mode (see migration 011_user_streak_type.sql)
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS streak_type VARCHAR(20) NOT NULL DEFAULT 'RECORDING';

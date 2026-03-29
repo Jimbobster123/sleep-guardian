@@ -69,6 +69,25 @@ export async function userPhoneNumberColumnExists() {
   return userPhoneNumberColumnExistsCache;
 }
 
+let streakTypeColumnExistsCache = null;
+export async function streakTypeColumnExists() {
+  if (streakTypeColumnExistsCache != null) return streakTypeColumnExistsCache;
+  try {
+    const result = await pool.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'User'
+         AND column_name = 'streak_type'
+       LIMIT 1`
+    );
+    streakTypeColumnExistsCache = result.rows.length > 0;
+  } catch {
+    streakTypeColumnExistsCache = false;
+  }
+  return streakTypeColumnExistsCache;
+}
+
 // Get all tasks for a user
 export async function getUserTasks(userId) {
   try {
@@ -371,12 +390,15 @@ export async function getAllUsers() {
 export async function getUserById(userId) {
   try {
     const withPhone = await userPhoneNumberColumnExists();
+    const withStreak = await streakTypeColumnExists();
+    const streakCol = withStreak ? ', streak_type' : '';
     const cols = withPhone
-      ? 'user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id'
-      : 'user_id, email, first_name, last_name, timezone, google_calendar_id';
+      ? `user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id${streakCol}`
+      : `user_id, email, first_name, last_name, timezone, google_calendar_id${streakCol}`;
     const result = await pool.query(`SELECT ${cols} FROM "User" WHERE user_id = $1`, [userId]);
     const row = result.rows[0];
     if (row && !withPhone) row.phone_number = null;
+    if (row && !withStreak) row.streak_type = 'RECORDING';
     return row;
   } catch (err) {
     console.error('Error fetching user:', err);
@@ -583,12 +605,14 @@ export async function revokeSession(sessionToken) {
 
 export async function getUserBySessionToken(sessionToken) {
   const withPhone = await userPhoneNumberColumnExists();
+  const withStreak = await streakTypeColumnExists();
   const nameAndTz = withPhone
     ? 'u.first_name, u.last_name, u.phone_number, u.timezone'
     : 'u.first_name, u.last_name, u.timezone';
+  const streakCol = withStreak ? ', u.streak_type' : '';
   const result = await pool.query(
     `SELECT u.user_id, u.email, ${nameAndTz},
-            u.google_refresh_token, u.google_calendar_id
+            u.google_refresh_token, u.google_calendar_id${streakCol}
      FROM "AuthSession" s
      JOIN "User" u ON u.user_id = s.user_id
      WHERE s.session_token = $1
@@ -598,6 +622,7 @@ export async function getUserBySessionToken(sessionToken) {
   );
   const row = result.rows[0];
   if (row && !withPhone) row.phone_number = null;
+  if (row && !withStreak) row.streak_type = 'RECORDING';
   return row;
 }
 
@@ -629,6 +654,25 @@ export async function updateUserProfile(userId, { email, first_name, last_name, 
   );
   const row = result.rows[0];
   if (row) row.phone_number = null;
+  return row;
+}
+
+export async function updateUserStreakType(userId, streakType) {
+  if (!(await streakTypeColumnExists())) {
+    return null;
+  }
+  const v = String(streakType).toUpperCase() === 'GOAL_MET' ? 'GOAL_MET' : 'RECORDING';
+  const withPhone = await userPhoneNumberColumnExists();
+  const returning = withPhone
+    ? 'RETURNING user_id, email, first_name, last_name, phone_number, timezone, streak_type, google_calendar_id'
+    : 'RETURNING user_id, email, first_name, last_name, timezone, streak_type, google_calendar_id';
+  const result = await pool.query(
+    `UPDATE "User" SET streak_type = $2 WHERE user_id = $1
+     ${returning}`,
+    [userId, v]
+  );
+  const row = result.rows[0];
+  if (row && !withPhone) row.phone_number = null;
   return row;
 }
 

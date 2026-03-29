@@ -56,6 +56,7 @@ psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
 psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
 psql -U postgres -d luna -f db/migrations/009_daily_sleep_log.sql
 psql -U postgres -d luna -f db/migrations/010_daily_sleep_log_latency_nullable.sql
+psql -U postgres -d luna -f db/migrations/011_user_streak_type.sql
 
 # Optional: load sample data
 psql -U postgres -d luna -f db/seed.sql
@@ -184,6 +185,10 @@ Migration **`db/migrations/009_daily_sleep_log.sql`** adds the **`DailySleepLog`
 
 **Index:** `idx_daily_sleep_log_user_date` on `(user_id, log_date DESC)` for range queries.
 
+### User streak mode (`streak_type`)
+
+Migration **`db/migrations/011_user_streak_type.sql`** adds **`User.streak_type`**: `RECORDING` (default) counts consecutive days with a **`DailySleepLog`** row; `GOAL_MET` requires **`actual_sleep_hours >= sleep_goal_hours`** for each day. The home streak badge uses this setting. **`PATCH /api/me/profile`** with `{ "streak_type": "RECORDING" | "GOAL_MET" }` updates it. **`GET /api/me`** returns **`streak_type`** and computed **`streak_days`**.
+
 ### API (authenticated, under `/api/me`)
 
 - **`GET /api/me/daily-sleep-log?date=YYYY-MM-DD`** — single day (or null if none).
@@ -271,6 +276,7 @@ psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
 psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
 psql -U postgres -d luna -f db/migrations/009_daily_sleep_log.sql
 psql -U postgres -d luna -f db/migrations/010_daily_sleep_log_latency_nullable.sql
+psql -U postgres -d luna -f db/migrations/011_user_streak_type.sql
 psql -U postgres -d luna -f db/seed.sql
 ```
 

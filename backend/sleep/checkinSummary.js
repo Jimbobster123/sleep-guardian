@@ -1,5 +1,6 @@
 import { DateTime } from 'luxon';
 import { listDailySleepLogsInRange } from '../queries.js';
+import { resolveUserTimeZone } from './streak.js';
 
 const MOOD_BASE = {
   exhausted: 20,
@@ -37,7 +38,7 @@ export function nightQualityScore(log) {
  * Sleep debt (7d): sum of max(0, goal − actual) per logged night in the window.
  */
 export async function buildSleepCheckinSummary(userId, timezone) {
-  const zone = timezone && String(timezone).trim() ? String(timezone).trim() : 'UTC';
+  const zone = resolveUserTimeZone(timezone);
   const today = DateTime.now().setZone(zone).startOf('day');
   const todayStr = today.toFormat('yyyy-MM-dd');
   const fromStr = today.minus({ days: 24 }).toFormat('yyyy-MM-dd');

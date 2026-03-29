@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { apiJson } from '@/lib/api';
 import { effectiveTimeZone, formatWallTime12h } from '@/lib/calendarTime';
 import { estimateSleepGoalHoursForToday } from '@/lib/sleepGoalHours';
+import { streakDaysForUser } from '@/lib/streakDisplay';
 import type { SleepCheckinSummary } from '@/lib/sleepCheckinSummary';
 import {
   formatDebtHours,
@@ -36,9 +37,10 @@ function apiDayOfWeek(dt: DateTime): number {
 }
 
 const SleepPage = () => {
-  const { token, user } = useAuth();
+  const { token, user, refreshMe } = useAuth();
+  const streakDays = streakDaysForUser(user);
   const navigate = useNavigate();
-  const { currentSleepHours, sleepGoal, consistencyScore, crisisMode, bedtime, wakeTime, streak } = useApp();
+  const { currentSleepHours, sleepGoal, consistencyScore, crisisMode, bedtime, wakeTime } = useApp();
   const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const [sleepRes, setSleepRes] = useState<SleepGoalSummary | null>(null);
   const [checkinSummary, setCheckinSummary] = useState<SleepCheckinSummary | null>(null);
@@ -77,10 +79,13 @@ const SleepPage = () => {
   }, [fetchCheckinSummary]);
 
   useEffect(() => {
-    const onSaved = () => void fetchCheckinSummary();
+    const onSaved = () => {
+      void fetchCheckinSummary();
+      void refreshMe();
+    };
     window.addEventListener('luna-sleep-checkin-saved', onSaved);
     return () => window.removeEventListener('luna-sleep-checkin-saved', onSaved);
-  }, [fetchCheckinSummary]);
+  }, [fetchCheckinSummary, refreshMe]);
 
   const tonightLine = useMemo(() => {
     const now = DateTime.now().setZone(zone);
@@ -147,8 +152,8 @@ const SleepPage = () => {
             </h1>
             <p className="mt-2 max-w-lg text-sm text-primary-foreground/85">
               {flexMins != null
-                ? `${flexMins} min wind-down before bed · ${streak}-day streak`
-                : `${streak}-day streak · stay gentle with yourself`}
+                ? `${flexMins} min wind-down before bed · ${streakDays}-day streak`
+                : `${streakDays}-day streak · stay gentle with yourself`}
             </p>
           </div>
         </section>
