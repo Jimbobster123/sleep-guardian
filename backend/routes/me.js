@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { requireAuth } from '../middleware/auth.js';
 import { parseIcs } from '../import/ics.js';
 import { buildScheduleSuggestions } from '../schedule/suggestions.js';
+import { getProfilePhotoUrl, saveProfilePhoto } from '../profilePhotos.js';
 import {
   createOrUpdateSleepGoal,
   createTask,
@@ -239,6 +240,29 @@ router.get('/bedtime-reminder', requireAuth, async (req, res) => {
     res.json(settings);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch bedtime reminder settings', details: err.message });
+  }
+});
+
+router.get('/profile-photo', requireAuth, async (req, res) => {
+  try {
+    const photo_url = await getProfilePhotoUrl(req.user.user_id);
+    res.json({ photo_url });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch profile photo', details: err.message });
+  }
+});
+
+router.put('/profile-photo', requireAuth, async (req, res) => {
+  try {
+    const imageDataUrl = typeof req.body?.imageDataUrl === 'string' ? req.body.imageDataUrl : '';
+    if (!imageDataUrl) {
+      return res.status(400).json({ error: 'imageDataUrl is required' });
+    }
+
+    const photo_url = await saveProfilePhoto(req.user.user_id, imageDataUrl);
+    res.json({ photo_url });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save profile photo', details: err.message });
   }
 });
 
