@@ -2,11 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import pool, { testConnection } from './db.js';
-import { getUserTasks, getAllUsers, getUserById, updateTask } from './queries.js';
+import { ensureDefaultAdminUser, updateTask } from './queries.js';
 import authRoutes from './routes/auth.js';
 import meRoutes from './routes/me.js';
 import googleRoutes from './routes/google.js';
 import okrRoutes from './routes/okr.js';
+import adminRoutes from './routes/admin.js';
 import { startBedtimeReminderService } from './reminders/service.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -97,36 +98,6 @@ app.get('/api/db-health', async (req, res) => {
   }
 });
 
-app.get('/api/users', async (req, res) => {
-  try {
-    const users = await getAllUsers();
-    res.json(users);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch users', details: err.message });
-  }
-});
-
-app.get('/api/users/:userId', async (req, res) => {
-  try {
-    const user = await getUserById(req.params.userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    res.json(user);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch user', details: err.message });
-  }
-});
-
-app.get('/api/users/:userId/tasks', async (req, res) => {
-  try {
-    const tasks = await getUserTasks(req.params.userId);
-    res.json(tasks);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch tasks', details: err.message });
-  }
-});
-
 app.put('/api/tasks/:taskId', async (req, res) => {
   try {
     const updatedTask = await updateTask(req.params.taskId, req.body);
@@ -146,6 +117,7 @@ app.get('/api/example', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/me', meRoutes);
 app.use('/api/google', googleRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/okr', okrRoutes);
 
 app.use((req, res) => {
@@ -162,6 +134,12 @@ async function start() {
 
   if (!dbConnected) {
     console.warn('Warning: Database connection failed. Some features may not work.');
+  } else {
+    try {
+      await ensureDefaultAdminUser();
+    } catch (e) {
+      console.warn('ensureDefaultAdminUser failed (run migration 009 if User.is_admin is missing):', e?.message || e);
+    }
   }
 
   app.listen(PORT, () => {
