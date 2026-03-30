@@ -67,7 +67,7 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
                       <Icon className="h-4 w-4 shrink-0" aria-hidden />
                       <span className="hidden text-sm font-medium md:inline">{label}</span>
                     </button>
-                  );https://github.com/Jimbobster123/sleep-guardian/pull/20/conflict?name=frontend%252Fsrc%252Fcomponents%252FAppLayout.tsx&ancestor_oid=a40282ac14dc155356945befcb0a6aab62813fe4&base_oid=9a99c96201ab3b8ba92bc2db9226445dea0bf406&head_oid=e2919e04812600cb57ef1716b416078d92414ea5
+                  );
                 })}
                 {token ? (
                   <button
