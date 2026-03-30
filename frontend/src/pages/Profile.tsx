@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -16,11 +16,14 @@ import {
 import SleepGoalForm, { SleepGoalDraft } from "@/components/SleepGoalForm";
 import { ApiError, apiAssetUrl, apiJson } from "@/lib/api";
 import { toast } from "@/components/ui/sonner";
-import { useAuth } from "@/contexts/AuthContext";
+import { useAuth, type StreakType } from "@/contexts/AuthContext";
 import { useApp } from "@/contexts/AppContext";
+import { useSleepCheckIn } from "@/contexts/SleepCheckInContext";
 import { useTheme } from "@/contexts/ThemeContext";
-import { LogOut, Zap, Sun, Moon } from "lucide-react";
+import { LogOut, Zap, Sun, Moon, ClipboardList } from "lucide-react";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { TIMEZONE_OPTIONS } from "@/lib/timezones";
+import { streakGoalMetDisplay, streakRecordingDisplay } from "@/lib/streakDisplay";
 
 type SleepGoalResponse = {
   goal?: {
@@ -55,6 +58,13 @@ type ReminderDraft = {
   enabled: boolean;
 };
 
+type OnboardingOKR = {
+  percentage: number;
+  numerator_count: number;
+  denominator_count: number;
+  interval_days: number;
+};
+
 const TEXT_REMINDERS_AVAILABLE = false;
 
 function getErrorMessage(err: unknown, fallback: string) {
@@ -72,6 +82,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 
 export default function Profile() {
   const { token, user, refreshMe, logout } = useAuth();
+  const { openModal: openSleepCheckIn } = useSleepCheckIn();
   const { crisisMode, setCrisisMode } = useApp();
   const { theme, toggleTheme } = useTheme();
   const [email, setEmail] = useState(user?.email || "");
@@ -95,6 +106,11 @@ export default function Profile() {
   const [reminderMinutes, setReminderMinutes] = useState("30");
   const [reminderEnabled, setReminderEnabled] = useState(false);
   const [reminderInitial, setReminderInitial] = useState<ReminderDraft | null>(null);
+  const [onboardingOkr, setOnboardingOkr] = useState<OnboardingOKR | null>(null);
+  const [loadingOkr, setLoadingOkr] = useState(true);
+  const [okrError, setOkrError] = useState<string | null>(null);
+  const [streakSaving, setStreakSaving] = useState(false);
+  const streakSectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setEmail(user?.email || "");
@@ -119,6 +135,37 @@ export default function Profile() {
     })();
     return () => {
       cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) {
+      setOnboardingOkr(null);
+      setLoadingOkr(false);
+      setOkrError(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingOkr(true);
+    setOkrError(null);
+    const loadOkr = async () => {
+      try {
+        const data = await apiJson<OnboardingOKR>("/api/okr/onboarding-sleep-goal-reminder-7d", { token });
+        if (cancelled) return;
+        setOnboardingOkr(data);
+        setOkrError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setOkrError(err instanceof Error ? err.message : "Failed to load OKR");
+      } finally {
+        if (!cancelled) setLoadingOkr(false);
+      }
+    };
+    void loadOkr();
+    const intervalId = window.setInterval(() => void loadOkr(), 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
     };
   }, [token]);
 
@@ -184,6 +231,32 @@ export default function Profile() {
       setMsg("Google Calendar connected.");
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    if (searchParams.get("focus") === "streak") {
+      streakSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [searchParams]);
+
+  const streakValue: StreakType = user?.streak_type === "GOAL_MET" ? "GOAL_MET" : "RECORDING";
+
+  const saveStreakType = async (next: StreakType) => {
+    if (!token || next === streakValue) return;
+    setStreakSaving(true);
+    try {
+      await apiJson<{ user: { streak_type?: string; streak_days?: number } }>("/api/me/profile", {
+        method: "PATCH",
+        token,
+        body: JSON.stringify({ streak_type: next }),
+      });
+      await refreshMe();
+      toast.success("Streak setting saved.", { duration: 2500 });
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Could not update streak setting."), { duration: 4000 });
+    } finally {
+      setStreakSaving(false);
+    }
+  };
 
   const saveAll = async () => {
     if (!token) return;
@@ -368,6 +441,67 @@ export default function Profile() {
               Logout
             </span>
           </button>
+        </div>
+
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <h2 className="text-sm font-semibold text-foreground mb-2">Morning sleep log</h2>
+          <p className="text-xs text-muted-foreground mb-3">
+            Log how last night went — quality, time in bed, and what affected sleep. This updates your home
+            suggestions.
+          </p>
+          <Button type="button" variant="default" size="sm" className="gap-2" onClick={() => openSleepCheckIn()}>
+            <ClipboardList className="w-4 h-4" />
+            Open sleep log
+          </Button>
+        </div>
+
+        <div
+          ref={streakSectionRef}
+          id="streak-settings"
+          className="bg-card rounded-xl p-4 shadow-sm border border-border/50"
+        >
+          <h2 className="text-sm font-semibold text-foreground mb-1">Streak settings</h2>
+          <p className="text-xs text-muted-foreground mb-3">
+            Choose what counts toward your day streak on the home screen.
+          </p>
+          <RadioGroup
+            value={streakValue}
+            onValueChange={(v) => void saveStreakType(v as StreakType)}
+            disabled={streakSaving || !token}
+            className="gap-3"
+          >
+            <div className="flex items-start gap-3 rounded-lg border border-border/50 p-3">
+              <RadioGroupItem value="RECORDING" id="streak-recording" className="mt-0.5" />
+              <div className="space-y-0.5 flex-1">
+                <Label htmlFor="streak-recording" className="text-sm font-medium cursor-pointer">
+                  Daily Logger
+                </Label>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Increment my streak every day I record my sleep.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 rounded-lg border border-border/50 p-3">
+              <RadioGroupItem value="GOAL_MET" id="streak-goal" className="mt-0.5" />
+              <div className="space-y-0.5 flex-1">
+                <Label htmlFor="streak-goal" className="text-sm font-medium cursor-pointer">
+                  Goal Crusher
+                </Label>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Only increment my streak on days I hit my sleep goal.
+                </p>
+              </div>
+            </div>
+          </RadioGroup>
+          <p className="text-xs text-muted-foreground mt-3 tabular-nums">
+            Daily log streak:{' '}
+            <span className="font-medium text-foreground">
+              {streakRecordingDisplay(user) ?? "—"}
+            </span>
+            {' · '}
+            Goal streak:{' '}
+            <span className="font-medium text-foreground">{streakGoalMetDisplay(user) ?? "—"}</span>
+          </p>
         </div>
 
         <div
@@ -627,6 +761,36 @@ export default function Profile() {
               {reminderBusy ? "Saving..." : "Save Changes"}
             </Button>
           </div>
+        </div>
+
+        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">OKR: Sleep setup</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Objective: reduce the burden of managing schedules around sleep
+              </p>
+              <p className="text-xs text-muted-foreground">Target: 80%</p>
+            </div>
+            <div className="text-right shrink-0">
+              {loadingOkr || !onboardingOkr ? (
+                <p className="text-2xl font-display font-bold text-foreground">—</p>
+              ) : (
+                <p className="text-2xl font-display font-bold text-foreground">
+                  {Math.round(onboardingOkr.percentage)}%
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                first {onboardingOkr?.interval_days ?? 7} days
+              </p>
+            </div>
+          </div>
+          {okrError ? <p className="text-xs text-red-500 mt-2">{okrError}</p> : null}
+          {onboardingOkr ? (
+            <p className="text-xs text-muted-foreground mt-2">
+              ({onboardingOkr.numerator_count}/{onboardingOkr.denominator_count}) users met the criteria
+            </p>
+          ) : null}
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">

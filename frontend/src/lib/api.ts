@@ -38,6 +38,12 @@ export async function apiJson<T>(
   const { token: _omit, ...init } = opts;
   const headers = new Headers(opts.headers || {});
   headers.set("Accept", "application/json");
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz && !headers.has("X-Client-Timezone")) headers.set("X-Client-Timezone", tz);
+  } catch {
+    /* ignore */
+  }
   if (!headers.has("Content-Type") && opts.body) {
     // Most calls send JSON. If a caller wants a different type (e.g. ICS), they pass Content-Type explicitly.
     const body: any = opts.body as any;
@@ -69,7 +75,13 @@ export async function apiJson<T>(
   const data = text ? safeJsonParse(text) : null;
 
   if (!res.ok) {
-    const msg = (data && typeof data === "object" && "error" in data && String((data as any).error)) || res.statusText;
+    const raw = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+    const base =
+      (raw && "error" in raw && String(raw.error)) || res.statusText;
+    const details = raw && "details" in raw && raw.details != null && String(raw.details).trim() !== ""
+      ? String(raw.details).trim()
+      : "";
+    const msg = details ? `${base}: ${details}` : base;
     throw new ApiError(msg, res.status, data);
   }
   return data as T;

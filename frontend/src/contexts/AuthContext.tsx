@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { ApiError, apiJson } from "@/lib/api";
 
+export type StreakType = "RECORDING" | "GOAL_MET";
+
 export type User = {
   user_id: string;
   email: string;
@@ -8,6 +10,14 @@ export type User = {
   last_name?: string | null;
   phone_number?: string | null;
   timezone?: string | null;
+  /** How streak is counted; default RECORDING if absent (older API responses). */
+  streak_type?: StreakType | null;
+  /** Consecutive days for the active streak_type (duplicate of one of the two below). */
+  streak_days?: number | null;
+  /** Consecutive days with any daily sleep log (wake dates). */
+  streak_days_recording?: number | null;
+  /** Consecutive days meeting sleep goal on each log. */
+  streak_days_goal_met?: number | null;
 };
 
 type AuthContextValue = {

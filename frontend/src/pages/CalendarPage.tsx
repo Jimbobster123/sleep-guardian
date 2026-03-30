@@ -23,9 +23,10 @@ import {
   effectiveTimeZone,
   formatTimestampForApi,
   hourFloatInZone,
+  hourRowOverlapsSuggestedWindDown,
+  hourRowOverlapsWindDown,
   parseApiTimestamp,
   parseApiTimestampToDate,
-  percentFromHourFloatFrom3am,
   snapMinutesToQuarter,
 } from '@/lib/calendarTime';
 import { blurNumberInputOnWheel } from '@/lib/utils';
@@ -44,6 +45,20 @@ const hours = Array.from({ length: 24 }, (_, i) => {
   const display = raw === 0 ? 12 : raw;
   return { hour: h, label: `${display}:00 ${ampm}` };
 });
+
+function minuteFrom3am(hourFloat: number): number {
+  return ((hourFloat - 3 + 24) % 24) * 60;
+}
+
+function rangesOverlap(a0: number, a1: number, b0: number, b1: number): boolean {
+  return a0 < b1 && a1 > b0;
+}
+
+function intervalContains(minuteOfDayFrom3am: number, start: number, end: number): boolean {
+  const m0 = minuteOfDayFrom3am;
+  const m1 = minuteOfDayFrom3am + 1440;
+  return (m0 >= start && m0 < end) || (m1 >= start && m1 < end);
+}
 
 type DbEvent = {
   event_id: string;
@@ -89,6 +104,7 @@ type SleepGoalResponse = {
   goal: {
     target_bedtime: string | null;
     target_wake_time: string | null;
+    bedtime_flex_minutes?: number | null;
   } | null;
   windows: Array<{
     day_of_week: number;
@@ -274,6 +290,16 @@ const CalendarPage = () => {
     };
   }, [windowForDay, sleep, suggestions]);
 
+  const windDownFlexMins = useMemo(
+    () => Math.max(0, Math.round(Number(sleep?.goal?.bedtime_flex_minutes ?? 0))),
+    [sleep?.goal?.bedtime_flex_minutes],
+  );
+
+  const suggestedBedDateTime = useMemo(() => {
+    if (!suggestions?.sleep_window?.start) return null;
+    return parseApiTimestamp(String(suggestions.sleep_window.start), zone);
+  }, [suggestions?.sleep_window?.start, zone]);
+
   // For overnight sleep windows (bedtime > wake time), early-morning hours
   // on the current calendar day belong to the previous day's "bedtime episode".
   // Backend scheduling also treats those hours as belonging to the previous day.
@@ -294,6 +320,26 @@ const CalendarPage = () => {
     const [bh, bm] = bed.split(':').map(Number);
     return (bh || 0) + (bm || 0) / 60;
   }, [prevWindowForDay, sleep?.goal?.target_bedtime]);
+
+  const dayVisibleRange = useMemo(() => {
+    const wakeBoundaryHour = sleepTimes.source === 'saved' && bedHourPrev >= wakeHourPrev ? wakeHourPrev : sleepTimes.wakeHour;
+    const startMin = minuteFrom3am(wakeBoundaryHour - 2);
+    let endMin = minuteFrom3am(sleepTimes.bedHour + 2);
+    if (endMin <= startMin) endMin += 1440;
+    const durationMin = Math.max(60, endMin - startMin);
+    return { startMin, endMin, durationMin };
+  }, [sleepTimes, bedHourPrev, wakeHourPrev]);
+
+  const visibleHours = useMemo(() => {
+    return hours.filter(({ hour }) => {
+      const rowStart = minuteFrom3am(hour);
+      const rowEnd = rowStart + 60;
+      return (
+        rangesOverlap(rowStart, rowEnd, dayVisibleRange.startMin, dayVisibleRange.endMin) ||
+        rangesOverlap(rowStart + 1440, rowEnd + 1440, dayVisibleRange.startMin, dayVisibleRange.endMin)
+      );
+    });
+  }, [dayVisibleRange]);
 
   const getEventStyle = (source?: string | null) => {
     if (source === 'task_planned') return 'bg-accent/15 border border-accent/30 text-foreground';
@@ -422,9 +468,11 @@ const CalendarPage = () => {
   const currentTimeTopPercent = useMemo(() => {
     if (!isViewingToday) return null;
     const hour = hourFloatInZone(now, zone);
-    const hoursFrom3am = (hour - 3 + 24) % 24;
-    return (hoursFrom3am / 24) * 100;
-  }, [isViewingToday, now, zone]);
+    const minsFrom3am = minuteFrom3am(hour);
+    if (!intervalContains(minsFrom3am, dayVisibleRange.startMin, dayVisibleRange.endMin)) return null;
+    const mapped = minsFrom3am < dayVisibleRange.startMin ? minsFrom3am + 1440 : minsFrom3am;
+    return ((mapped - dayVisibleRange.startMin) / dayVisibleRange.durationMin) * 100;
+  }, [isViewingToday, now, zone, dayVisibleRange]);
 
   const dayTimelineRef = useRef<HTMLDivElement | null>(null);
   const [draggingEventId, setDraggingEventId] = useState<string | null>(null);
@@ -547,10 +595,10 @@ const CalendarPage = () => {
       const frac = Math.max(0, Math.min(1, y / rect.height));
       const strip0 = parseApiTimestamp(`${dateStr} 03:00:00`, zone);
       if (!strip0) return null;
-      const snappedMin = snapMinutesToQuarter(Math.round(frac * 24 * 60));
-      return strip0.plus({ minutes: snappedMin }).toMillis();
+      const snappedMin = snapMinutesToQuarter(Math.round(frac * dayVisibleRange.durationMin));
+      return strip0.plus({ minutes: dayVisibleRange.startMin + snappedMin }).toMillis();
     },
-    [dateStr, zone],
+    [dateStr, zone, dayVisibleRange],
   );
 
   const DRAG_THRESHOLD_PX = 6;
@@ -719,6 +767,13 @@ const CalendarPage = () => {
             <Moon className="w-3.5 h-3.5 inline mr-1 text-sleep" />
             <span className="font-medium">Sleep window protected:</span> {sleepTimes.label}. Scheduling here will trigger a gentle warning.
           </p>
+          {windDownFlexMins > 0 ? (
+            <p className="text-xs text-muted-foreground mt-1.5">
+              <span className="font-medium text-foreground/90">Wind-down</span> — the{' '}
+              {windDownFlexMins}-minute block before your goal bedtime is a lighter pink-purple band on the timeline
+              (sleep is the deeper blue-lavender).
+            </p>
+          ) : null}
         </div>
         )}
 
@@ -1164,7 +1219,7 @@ const CalendarPage = () => {
           <div className="bg-card rounded-xl shadow-sm border border-border/50 overflow-hidden">
             <div className="flex">
               <div className="w-[7.5rem] flex-shrink-0 border-r border-border/30 flex flex-col bg-card">
-                {hours.map(({ hour, label }) => (
+                {visibleHours.map(({ hour, label }) => (
                   <div
                     key={hour}
                     className="min-h-[3rem] border-b border-border/30 py-2 px-2 text-[11px] text-muted-foreground"
@@ -1173,8 +1228,12 @@ const CalendarPage = () => {
                   </div>
                 ))}
               </div>
-              <div ref={dayTimelineRef} className="flex-1 relative min-h-[72rem] bg-background/30">
-                {hours.map(({ hour }) => {
+              <div
+                ref={dayTimelineRef}
+                className="flex-1 relative bg-background/30"
+                style={{ minHeight: `${visibleHours.length * 3}rem` }}
+              >
+                {visibleHours.map(({ hour }) => {
                   const currentCrossesMidnight = sleepTimes.bedHour >= sleepTimes.wakeHour;
 
                   // Only apply the "previous day episode" adjustment to saved sleep windows.
@@ -1195,12 +1254,35 @@ const CalendarPage = () => {
                   const inWakeWindow = hour >= Math.floor(wakeBoundaryHour) && hour < Math.floor(wakeBoundaryHour) + 1;
                   const isWakeRow = hour === Math.floor(wakeBoundaryHour);
                   const isBedRow = hour === Math.floor(sleepTimes.bedHour);
+                  const morningSleepTail = isSavedMode && inPrevEpisode;
+
+                  let inWindDown = false;
+                  if (windDownFlexMins > 0 && !morningSleepTail) {
+                    if (sleepTimes.source === 'suggested' && suggestedBedDateTime) {
+                      inWindDown = hourRowOverlapsSuggestedWindDown(
+                        dateStr,
+                        hour,
+                        zone,
+                        suggestedBedDateTime,
+                        windDownFlexMins,
+                      );
+                    } else if (sleepTimes.source === 'saved') {
+                      inWindDown = hourRowOverlapsWindDown(
+                        dateStr,
+                        hour,
+                        zone,
+                        sleepTimes.bedHour,
+                        windDownFlexMins,
+                      );
+                    }
+                  }
+
+                  const timelineBg =
+                    inSleepWindow ? 'sleep-window-bg' : inWindDown ? 'wind-down-bg' : inWakeWindow ? 'wake-window-bg' : '';
                   return (
                     <div
                       key={hour}
-                      className={`relative min-h-[3rem] border-b border-border/30 ${
-                        inSleepWindow ? 'sleep-window-bg' : inWakeWindow ? 'wake-window-bg' : ''
-                      }`}
+                      className={`relative min-h-[3rem] border-b border-border/30 ${timelineBg}`}
                     >
                       {isWakeRow && (
                         <>
@@ -1248,9 +1330,16 @@ const CalendarPage = () => {
                     const s = new Date(sTime);
                     const en = new Date(eTime);
                     const startH = hourFloatInZone(s, zone);
-                    const durH = Math.max(0.25, (en.getTime() - s.getTime()) / 3_600_000);
-                    const top = percentFromHourFloatFrom3am(startH);
-                    const hPct = (durH / 24) * 100;
+                    const startMinRaw = minuteFrom3am(startH);
+                    const startMin =
+                      startMinRaw < dayVisibleRange.startMin ? startMinRaw + 1440 : startMinRaw;
+                    const durMin = Math.max(15, (en.getTime() - s.getTime()) / 60_000);
+                    const endMin = startMin + durMin;
+                    const clipStart = Math.max(startMin, dayVisibleRange.startMin);
+                    const clipEnd = Math.min(endMin, dayVisibleRange.endMin);
+                    if (clipEnd <= clipStart) return null;
+                    const top = ((clipStart - dayVisibleRange.startMin) / dayVisibleRange.durationMin) * 100;
+                    const hPct = ((clipEnd - clipStart) / dayVisibleRange.durationMin) * 100;
                     const draggable = !event.is_all_day;
                     const startLabel = DateTime.fromJSDate(s).setZone(zone).toFormat('h:mm a');
                     const endLabel = DateTime.fromJSDate(en).setZone(zone).toFormat('h:mm a');
@@ -1339,7 +1428,7 @@ const CalendarPage = () => {
             ))}
           </div>
           <div className="relative">
-            {hours.map(({ hour, label }) => (
+            {visibleHours.map(({ hour, label }) => (
               <div key={hour} className="grid min-w-[600px] border-b border-border min-h-[2.5rem]" style={{ gridTemplateColumns: '4.5rem repeat(7, minmax(0, 1fr))' }}>
                 <div className="py-1 px-2 text-[10px] text-muted-foreground flex-shrink-0 border-r border-border min-w-[4.5rem]">
                   {label}
@@ -1370,7 +1459,18 @@ const CalendarPage = () => {
                     const endH = hourFloatInZone(x.end, zone);
                     return startH < hourEnd && endH > hourStart;
                   });
-                  const bgStyles = inSleepWindow ? 'sleep-window-bg' : inWakeWindow ? 'wake-window-bg' : '';
+                  const weekMorningSleepTail = prevCrossesMidnight && hour < Math.floor(prevWakeHour);
+                  const inWindDownWeek =
+                    windDownFlexMins > 0 && !weekMorningSleepTail
+                      ? hourRowOverlapsWindDown(dayKey, hour, zone, bedHour, windDownFlexMins)
+                      : false;
+                  const bgStyles = inSleepWindow
+                    ? 'sleep-window-bg'
+                    : inWindDownWeek
+                      ? 'wind-down-bg'
+                      : inWakeWindow
+                        ? 'wake-window-bg'
+                        : '';
                   return (
                     <div
                       key={dayKey}

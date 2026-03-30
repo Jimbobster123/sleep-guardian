@@ -146,3 +146,65 @@ export function formatWallTime12h(time: string | null | undefined): string | nul
   if (!dt.isValid) return null;
   return dt.toFormat('h:mm a');
 }
+
+/** Start of wall-clock hour [hour, hour+1) on calendar date (yyyy-MM-dd) in zone. */
+export function localHourRowStartOnDate(dateStr: string, wallHour: number, zone: string): DateTime | null {
+  const h = Math.min(23, Math.max(0, Math.floor(wallHour)));
+  const dt = DateTime.fromISO(`${dateStr}T${String(h).padStart(2, '0')}:00:00`, { zone });
+  return dt.isValid ? dt : null;
+}
+
+/** Instant of goal bedtime on dateStr from fractional hour (e.g. 23.5 = 11:30 PM that calendar night). */
+export function wallBedtimeOnDate(dateStr: string, bedHourFloat: number, zone: string): DateTime | null {
+  const day = DateTime.fromISO(dateStr, { zone });
+  if (!day.isValid) return null;
+  const mins = Math.round(bedHourFloat * 60);
+  return day.startOf('day').plus({ minutes: mins });
+}
+
+/** Whether [rowStart, rowEnd) overlaps half-open [rangeStart, rangeEnd). */
+export function wallIntervalsOverlap(
+  rowStart: DateTime,
+  rowEnd: DateTime,
+  rangeStart: DateTime,
+  rangeEnd: DateTime,
+): boolean {
+  return rowStart < rangeEnd && rowEnd > rangeStart;
+}
+
+/**
+ * True if the calendar hour row overlaps wind-down [bedtime − flex, bedtime) for saved goal times.
+ * `flexMins` must be > 0.
+ */
+export function hourRowOverlapsWindDown(
+  dateStr: string,
+  wallHour: number,
+  zone: string,
+  bedHourFloat: number,
+  flexMins: number,
+): boolean {
+  if (flexMins <= 0) return false;
+  const bed = wallBedtimeOnDate(dateStr, bedHourFloat, zone);
+  if (!bed || !bed.isValid) return false;
+  const wStart = bed.minus({ minutes: flexMins });
+  const row0 = localHourRowStartOnDate(dateStr, wallHour, zone);
+  if (!row0) return false;
+  const row1 = row0.plus({ hours: 1 });
+  return wallIntervalsOverlap(row0, row1, wStart, bed);
+}
+
+/** Wind-down before a suggested bedtime instant (same semantics as hourRowOverlapsWindDown). */
+export function hourRowOverlapsSuggestedWindDown(
+  dateStr: string,
+  wallHour: number,
+  zone: string,
+  suggestedBed: DateTime,
+  flexMins: number,
+): boolean {
+  if (flexMins <= 0 || !suggestedBed.isValid) return false;
+  const wStart = suggestedBed.minus({ minutes: flexMins });
+  const row0 = localHourRowStartOnDate(dateStr, wallHour, zone);
+  if (!row0) return false;
+  const row1 = row0.plus({ hours: 1 });
+  return wallIntervalsOverlap(row0, row1, wStart, suggestedBed);
+}
