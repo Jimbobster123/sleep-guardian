@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSleepCheckIn } from '@/contexts/SleepCheckInContext';
 
 const tabs = [
-  { path: '/', icon: Home, label: 'Home' },
+  { path: '/home', icon: Home, label: 'Home' },
   { path: '/tasks', icon: CheckSquare, label: 'Tasks' },
   { path: '/calendar', icon: CalendarDays, label: 'Calendar' },
   { path: '/sleep', icon: Moon, label: 'Sleep' },
@@ -20,6 +20,7 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
   const { token } = useAuth();
   const { openModal: openSleepLog } = useSleepCheckIn();
   const hideNav =
+    location.pathname === '/' ||
     location.pathname.startsWith('/login') ||
     location.pathname.startsWith('/signup') ||
     location.pathname.startsWith('/onboarding');
@@ -66,7 +67,7 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
                       <Icon className="h-4 w-4 shrink-0" aria-hidden />
                       <span className="hidden text-sm font-medium md:inline">{label}</span>
                     </button>
-                  );
+                  );https://github.com/Jimbobster123/sleep-guardian/pull/20/conflict?name=frontend%252Fsrc%252Fcomponents%252FAppLayout.tsx&ancestor_oid=a40282ac14dc155356945befcb0a6aab62813fe4&base_oid=9a99c96201ab3b8ba92bc2db9226445dea0bf406&head_oid=e2919e04812600cb57ef1716b416078d92414ea5
                 })}
                 {token ? (
                   <button
@@ -86,17 +87,22 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
         </header>
       )}
 
-      <div className="mx-auto w-full max-w-md md:max-w-5xl px-4 md:px-6">
-        {crisisMode && !hideNav && (
-          <div className="bg-crisis-light border-b border-crisis/20 px-4 py-2 text-center md:rounded-b-xl md:mx-0">
-            <span className="text-sm font-medium text-crisis">⚡ Crisis Mode Active — Focus on strategic recovery</span>
-          </div>
-        )}
-
-        <main className={`${hideNav ? 'pb-0' : 'pt-4 pb-6'} no-scrollbar overflow-y-auto`}>
+      {hideNav ? (
+        <main className="no-scrollbar overflow-y-auto">
           {children}
         </main>
-      </div>
+      ) : (
+        <div className="mx-auto w-full max-w-md md:max-w-5xl px-4 md:px-6">
+          {crisisMode && (
+            <div className="bg-crisis-light border-b border-crisis/20 px-4 py-2 text-center md:rounded-b-xl md:mx-0">
+              <span className="text-sm font-medium text-crisis">⚡ Crisis Mode Active — Focus on strategic recovery</span>
+            </div>
+          )}
+          <main className="pt-4 pb-6 no-scrollbar overflow-y-auto">
+            {children}
+          </main>
+        </div>
+      )}
     </div>
   );
 };

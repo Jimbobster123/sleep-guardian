@@ -19,6 +19,7 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import OnboardingSleepGoal from "./pages/OnboardingSleepGoal";
 import Profile from "./pages/Profile";
+import Landing from "./pages/Landing";
 
 const queryClient = new QueryClient();
 
@@ -34,6 +35,7 @@ const App = () => (
             <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
               <AppLayout>
                 <Routes>
+                  <Route path="/" element={<Landing />} />
                   <Route path="/login" element={<Login />} />
                   <Route path="/signup" element={<Signup />} />
                   <Route
@@ -45,7 +47,7 @@ const App = () => (
                     }
                   />
                   <Route
-                    path="/"
+                    path="/home"
                     element={
                       <RequireAuth>
                         <Index />

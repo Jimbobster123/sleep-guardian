@@ -3,8 +3,19 @@ import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/contexts/AuthContext";
 import { TIMEZONE_OPTIONS } from "@/lib/timezones";
+import { ApiError, apiJson } from "@/lib/api";
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("Failed to read the selected image."));
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function Signup() {
   const { signup } = useAuth();
@@ -15,6 +26,7 @@ export default function Signup() {
   const [lastName, setLastName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [timezone, setTimezone] = useState("");
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,10 +35,17 @@ export default function Signup() {
     setBusy(true);
     setError(null);
     try {
-      await signup({ email, password, firstName, lastName, phoneNumber, timezone });
+      const res = await signup({ email, password, firstName, lastName, phoneNumber, timezone });
+      if (photoDataUrl) {
+        await apiJson("/api/me/profile-photo", {
+          method: "PUT",
+          token: res.token,
+          body: JSON.stringify({ imageDataUrl: photoDataUrl }),
+        });
+      }
       nav("/onboarding/sleep-goal", { replace: true });
-    } catch (err: any) {
-      setError(err?.message || "Signup failed");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Signup failed");
     } finally {
       setBusy(false);
     }
@@ -39,6 +58,38 @@ export default function Signup() {
         <p className="text-sm text-muted-foreground mt-1">Then set your sleep goal and calendar.</p>
 
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
+          <div className="flex flex-col items-center gap-3">
+            <Avatar className="h-20 w-20 border border-border/50">
+              {photoDataUrl ? <AvatarImage src={photoDataUrl} alt="Profile preview" /> : null}
+              <AvatarFallback className="text-lg font-semibold">
+                {(firstName?.[0] || email?.[0] || "U").toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+            <div className="w-full space-y-1">
+              <Label htmlFor="signup-photo">Profile Photo (optional)</Label>
+              <Input
+                id="signup-photo"
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) {
+                    setPhotoDataUrl(null);
+                    return;
+                  }
+                  try {
+                    setPhotoDataUrl(await readFileAsDataUrl(file));
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Failed to load image.");
+                  }
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional. You can upload or change your profile photo later in settings.
+              </p>
+            </div>
+          </div>
+
           <div className="space-y-1">
             <Label htmlFor="email">Email</Label>
             <Input id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />

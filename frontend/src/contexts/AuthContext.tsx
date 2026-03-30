@@ -32,7 +32,7 @@ type AuthContextValue = {
     lastName?: string;
     phoneNumber?: string;
     timezone?: string;
-  }) => Promise<void>;
+  }) => Promise<{ token: string; user: User }>;
   logout: () => Promise<void>;
   refreshMe: () => Promise<void>;
 };
@@ -113,6 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
       setSession(res.token);
       setUser(res.user);
+      return res;
     },
     [setSession]
   );
