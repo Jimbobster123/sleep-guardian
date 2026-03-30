@@ -4,7 +4,7 @@ import { Home, CheckSquare, CalendarDays, Moon, User } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 
 const tabs = [
-  { path: '/', icon: Home, label: 'Home' },
+  { path: '/home', icon: Home, label: 'Home' },
   { path: '/tasks', icon: CheckSquare, label: 'Tasks' },
   { path: '/calendar', icon: CalendarDays, label: 'Calendar' },
   { path: '/sleep', icon: Moon, label: 'Sleep' },
@@ -16,6 +16,7 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
   const location = useLocation();
   const { crisisMode } = useApp();
   const hideNav =
+    location.pathname === '/' ||
     location.pathname.startsWith('/login') ||
     location.pathname.startsWith('/signup') ||
     location.pathname.startsWith('/onboarding');
@@ -28,7 +29,7 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
           <div className="mx-auto w-full max-w-md md:max-w-5xl pl-2 pr-4 md:pl-3 md:pr-6 py-3">
             <div className="flex items-center justify-between gap-4">
               <button
-                onClick={() => navigate('/')}
+                onClick={() => navigate('/home')}
                 className="flex items-center gap-2"
                 aria-label="Go to Home"
               >
@@ -63,17 +64,22 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
         </header>
       )}
 
-      <div className="mx-auto w-full max-w-md md:max-w-5xl px-4 md:px-6">
-        {crisisMode && !hideNav && (
-          <div className="bg-crisis-light border-b border-crisis/20 px-4 py-2 text-center md:rounded-b-xl md:mx-0">
-            <span className="text-sm font-medium text-crisis">⚡ Crisis Mode Active — Focus on strategic recovery</span>
-          </div>
-        )}
-
-        <main className={`${hideNav ? 'pb-0' : 'pt-4 pb-6'} no-scrollbar overflow-y-auto`}>
+      {hideNav ? (
+        <main className="no-scrollbar overflow-y-auto">
           {children}
         </main>
-      </div>
+      ) : (
+        <div className="mx-auto w-full max-w-md md:max-w-5xl px-4 md:px-6">
+          {crisisMode && (
+            <div className="bg-crisis-light border-b border-crisis/20 px-4 py-2 text-center md:rounded-b-xl md:mx-0">
+              <span className="text-sm font-medium text-crisis">⚡ Crisis Mode Active — Focus on strategic recovery</span>
+            </div>
+          )}
+          <main className="pt-4 pb-6 no-scrollbar overflow-y-auto">
+            {children}
+          </main>
+        </div>
+      )}
     </div>
   );
 };
