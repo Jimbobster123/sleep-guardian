@@ -4,6 +4,7 @@ import PageHeader from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -13,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import SleepGoalForm, { SleepGoalDraft } from "@/components/SleepGoalForm";
-import { ApiError, apiJson } from "@/lib/api";
+import { ApiError, apiAssetUrl, apiJson } from "@/lib/api";
 import { toast } from "@/components/ui/sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { useApp } from "@/contexts/AppContext";
@@ -60,6 +61,15 @@ function getErrorMessage(err: unknown, fallback: string) {
   return err instanceof ApiError ? err.message : fallback;
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("Failed to read the selected image."));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function Profile() {
   const { token, user, refreshMe, logout } = useAuth();
   const { crisisMode, setCrisisMode } = useApp();
@@ -70,7 +80,8 @@ export default function Profile() {
   const [last, setLast] = useState(user?.last_name || "");
   const [tz, setTz] = useState(user?.timezone || "");
   const [goal, setGoal] = useState<SleepGoalResponse | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [goalBusy, setGoalBusy] = useState(false);
   const [icsBusy, setIcsBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [reminderBusy, setReminderBusy] = useState(false);
@@ -78,6 +89,8 @@ export default function Profile() {
   const [searchParams] = useSearchParams();
   const [goalError, setGoalError] = useState<string | null>(null);
   const [reminderError, setReminderError] = useState<string | null>(null);
+  const [currentPhotoUrl, setCurrentPhotoUrl] = useState<string | null>(null);
+  const [pendingPhotoDataUrl, setPendingPhotoDataUrl] = useState<string | null>(null);
   const [reminderMethod, setReminderMethod] = useState<ReminderMethod>("email");
   const [reminderMinutes, setReminderMinutes] = useState("30");
   const [reminderEnabled, setReminderEnabled] = useState(false);
@@ -102,6 +115,24 @@ export default function Profile() {
         if (!cancelled) {
           toast.error(getErrorMessage(err, "Failed to load sleep goal."));
         }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!token) return;
+      try {
+        const res = await apiJson<{ photo_url: string | null }>("/api/me/profile-photo", { token });
+        if (!cancelled) {
+          setCurrentPhotoUrl(apiAssetUrl(res.photo_url));
+        }
+      } catch {
+        if (!cancelled) setCurrentPhotoUrl(null);
       }
     })();
     return () => {
@@ -156,34 +187,35 @@ export default function Profile() {
 
   const saveAll = async () => {
     if (!token) return;
-    setBusy(true);
+    setProfileBusy(true);
     setMsg(null);
-    setGoalError(null);
-    let formWillHandleBusy = false;
     try {
       await apiJson("/api/me/profile", {
         method: "PUT",
         token,
         body: JSON.stringify({ email, first_name: first, last_name: last, phone_number: phoneNumber, timezone: tz }),
       });
-      await refreshMe();
-      const form = document.getElementById("profile-sleep-goal-form") as HTMLFormElement | null;
-      if (form) {
-        form.requestSubmit();
-        formWillHandleBusy = true;
-      } else {
-        toast.success("Saved.", { duration: 3000 });
+      if (pendingPhotoDataUrl) {
+        const photoRes = await apiJson<{ photo_url: string }>("/api/me/profile-photo", {
+          method: "PUT",
+          token,
+          body: JSON.stringify({ imageDataUrl: pendingPhotoDataUrl }),
+        });
+        setCurrentPhotoUrl(apiAssetUrl(photoRes.photo_url));
+        setPendingPhotoDataUrl(null);
       }
+      await refreshMe();
+      toast.success("Profile saved.", { duration: 3000 });
     } catch (err) {
       toast.error(getErrorMessage(err, "Failed to save."), { duration: 3000 });
     } finally {
-      if (!formWillHandleBusy) setBusy(false);
+      setProfileBusy(false);
     }
   };
 
   const saveGoal = async (draft: SleepGoalDraft) => {
     if (!token) return;
-    setBusy(true);
+    setGoalBusy(true);
     setGoalError(null);
     try {
       const res = await apiJson<SleepGoalResponse>("/api/me/sleep-goal", {
@@ -192,13 +224,13 @@ export default function Profile() {
         body: JSON.stringify(draft),
       });
       setGoal({ goal: res.goal, windows: res.windows });
-      toast.success("Saved.", { duration: 3000 });
+      toast.success("Sleep goal saved.", { duration: 3000 });
     } catch (err) {
       const message = getErrorMessage(err, "Failed to save.");
       setGoalError(message);
       toast.error(message, { duration: 3000 });
     } finally {
-      setBusy(false);
+      setGoalBusy(false);
     }
   };
 
@@ -276,6 +308,8 @@ export default function Profile() {
     );
   }, [currentReminderDraft, reminderInitial]);
 
+  const displayPhotoUrl = pendingPhotoDataUrl || currentPhotoUrl;
+
   const saveReminder = async () => {
     if (!token) return;
     setReminderBusy(true);
@@ -311,12 +345,13 @@ export default function Profile() {
       <PageHeader title="Profile" compact />
       <div className="px-5 -mt-2 space-y-4 pb-6">
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 flex items-center gap-3 overflow-visible">
-          <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
-            <span className="text-sm font-semibold text-accent">
+          <Avatar className="w-10 h-10 border border-border/50">
+            {displayPhotoUrl ? <AvatarImage src={displayPhotoUrl} alt="Profile photo" /> : null}
+            <AvatarFallback className="bg-accent/20 text-accent text-sm font-semibold">
               {(user?.first_name?.[0] || user?.email?.[0] || "U").toUpperCase()}
               {(user?.last_name?.[0] || "").toUpperCase()}
-            </span>
-          </div>
+            </AvatarFallback>
+          </Avatar>
           <div className="flex-1">
             <p className="text-sm font-medium text-foreground">
               {[user?.first_name, user?.last_name].filter(Boolean).join(" ") || "Your account"}
@@ -426,6 +461,39 @@ export default function Profile() {
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <h2 className="text-sm font-semibold text-foreground mb-3">Profile</h2>
+          <div className="flex flex-col items-center gap-3 mb-4">
+            <Avatar className="h-24 w-24 border border-border/50">
+              {displayPhotoUrl ? <AvatarImage src={displayPhotoUrl} alt="Profile photo preview" /> : null}
+              <AvatarFallback className="text-xl font-semibold">
+                {(first?.[0] || email?.[0] || "U").toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+            <div className="w-full space-y-1">
+              <Label htmlFor="profile-photo">Profile Photo (optional)</Label>
+              <Input
+                id="profile-photo"
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) {
+                    setPendingPhotoDataUrl(null);
+                    return;
+                  }
+                  try {
+                    setPendingPhotoDataUrl(await readFileAsDataUrl(file));
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Failed to load image.");
+                  } finally {
+                    e.currentTarget.value = "";
+                  }
+                }}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Upload a new photo and save the Profile card to replace your current one.
+              </p>
+            </div>
+          </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="space-y-1">
               <Label>Email Address</Label>
@@ -479,8 +547,8 @@ export default function Profile() {
           </div>
 
           <div className="flex justify-end pt-4">
-            <Button onClick={saveAll} disabled={busy}>
-              {busy ? "Saving..." : "Save Profile"}
+            <Button onClick={saveAll} disabled={profileBusy}>
+              {profileBusy ? "Saving..." : "Save Profile"}
             </Button>
           </div>
         </div>
@@ -575,9 +643,18 @@ export default function Profile() {
               windows: goal?.windows,
             }}
             onSubmit={saveGoal}
-            busy={busy}
+            busy={goalBusy}
             submitError={goalError}
           />
+          <div className="flex justify-end pt-4">
+            <Button
+              type="button"
+              onClick={() => document.getElementById("profile-sleep-goal-form")?.requestSubmit()}
+              disabled={goalBusy}
+            >
+              {goalBusy ? "Saving..." : "Save Sleep Goal"}
+            </Button>
+          </div>
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">

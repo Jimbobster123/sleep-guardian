@@ -8,11 +8,14 @@ import meRoutes from './routes/me.js';
 import googleRoutes from './routes/google.js';
 import okrRoutes from './routes/okr.js';
 import { startBedtimeReminderService } from './reminders/service.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5001;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const frontendOrigins = (process.env.FRONTEND_URL || '')
   .split(',')
@@ -67,7 +70,8 @@ app.use(
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.get('/', (req, res) => {
   res.json({
