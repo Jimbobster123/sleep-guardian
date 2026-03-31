@@ -1,4 +1,7 @@
 import pool from './db.js';
+import { hashPassword } from './auth/password.js';
+
+export const DEFAULT_ADMIN_EMAIL = 'admin@sleep-guardian.local';
 
 function asNullIfEmpty(v) {
   if (v === undefined) return undefined;
@@ -69,6 +72,10 @@ export async function userPhoneNumberColumnExists() {
   return userPhoneNumberColumnExistsCache;
 }
 
+let reminderMethodColumnExistsCache = null;
+/** True if `"Reminder".method` exists (migration 007). Older DBs omit this column. */
+export async function reminderMethodColumnExists() {
+  if (reminderMethodColumnExistsCache != null) return reminderMethodColumnExistsCache;
 let streakTypeColumnExistsCache = null;
 export async function streakTypeColumnExists() {
   if (streakTypeColumnExistsCache != null) return streakTypeColumnExistsCache;
@@ -77,6 +84,15 @@ export async function streakTypeColumnExists() {
       `SELECT 1
        FROM information_schema.columns
        WHERE table_schema = 'public'
+         AND table_name = 'Reminder'
+         AND column_name = 'method'
+       LIMIT 1`
+    );
+    reminderMethodColumnExistsCache = result.rows.length > 0;
+  } catch {
+    reminderMethodColumnExistsCache = false;
+  }
+  return reminderMethodColumnExistsCache;
          AND table_name = 'User'
          AND column_name = 'streak_type'
        LIMIT 1`
@@ -375,8 +391,8 @@ export async function getAllUsers() {
   try {
     const withPhone = await userPhoneNumberColumnExists();
     const cols = withPhone
-      ? 'user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id'
-      : 'user_id, email, first_name, last_name, timezone, google_calendar_id';
+      ? 'user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin, created_at'
+      : 'user_id, email, first_name, last_name, timezone, google_calendar_id, is_admin, created_at';
     const result = await pool.query(`SELECT ${cols} FROM "User" ORDER BY created_at DESC`);
     if (!withPhone) result.rows.forEach((r) => { r.phone_number = null; });
     return result.rows;
@@ -393,6 +409,8 @@ export async function getUserById(userId) {
     const withStreak = await streakTypeColumnExists();
     const streakCol = withStreak ? ', streak_type' : '';
     const cols = withPhone
+      ? 'user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin, created_at'
+      : 'user_id, email, first_name, last_name, timezone, google_calendar_id, is_admin, created_at';
       ? `user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id${streakCol}`
       : `user_id, email, first_name, last_name, timezone, google_calendar_id${streakCol}`;
     const result = await pool.query(`SELECT ${cols} FROM "User" WHERE user_id = $1`, [userId]);
@@ -548,8 +566,8 @@ export async function updateTaskStatus(taskId, userId, status) {
 export async function getUserByEmail(email) {
   const withPhone = await userPhoneNumberColumnExists();
   const cols = withPhone
-    ? 'user_id, email, password_hash, first_name, last_name, phone_number, timezone, google_calendar_id'
-    : 'user_id, email, password_hash, first_name, last_name, timezone, google_calendar_id';
+    ? 'user_id, email, password_hash, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin'
+    : 'user_id, email, password_hash, first_name, last_name, timezone, google_calendar_id, is_admin';
   const result = await pool.query(`SELECT ${cols} FROM "User" WHERE email = $1`, [email]);
   const row = result.rows[0];
   if (row && !withPhone) row.phone_number = null;
@@ -622,6 +640,7 @@ export async function getUserBySessionToken(sessionToken) {
   const streakCol = withStreak ? ', u.streak_type' : '';
   const result = await pool.query(
     `SELECT u.user_id, u.email, ${nameAndTz},
+            u.google_refresh_token, u.google_calendar_id, u.is_admin
             u.google_refresh_token, u.google_calendar_id${streakCol}
      FROM "AuthSession" s
      JOIN "User" u ON u.user_id = s.user_id
@@ -647,7 +666,7 @@ export async function updateUserProfile(userId, { email, first_name, last_name, 
            phone_number = COALESCE($5, phone_number),
            timezone = COALESCE($6, timezone)
        WHERE user_id = $1
-       RETURNING user_id, email, first_name, last_name, phone_number, timezone`,
+       RETURNING user_id, email, first_name, last_name, phone_number, timezone, is_admin`,
       [userId, asNullIfEmpty(email), asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(phone_number), asNullIfEmpty(timezone)]
     );
     return result.rows[0];
@@ -659,7 +678,7 @@ export async function updateUserProfile(userId, { email, first_name, last_name, 
          last_name = COALESCE($4, last_name),
          timezone = COALESCE($5, timezone)
      WHERE user_id = $1
-     RETURNING user_id, email, first_name, last_name, timezone`,
+     RETURNING user_id, email, first_name, last_name, timezone, is_admin`,
     [userId, asNullIfEmpty(email), asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(timezone)]
   );
   const row = result.rows[0];
@@ -667,6 +686,50 @@ export async function updateUserProfile(userId, { email, first_name, last_name, 
   return row;
 }
 
+export async function countAdminUsers() {
+  const result = await pool.query(`SELECT COUNT(*)::int AS n FROM "User" WHERE is_admin = true`);
+  return result.rows[0]?.n ?? 0;
+}
+
+export async function updateUserByAdmin(userId, updates) {
+  const withPhone = await userPhoneNumberColumnExists();
+  const fields = [];
+  const params = [];
+  let n = 1;
+  if (updates.email !== undefined) {
+    fields.push(`email = $${n++}`);
+    params.push(asNullIfEmpty(updates.email));
+  }
+  if (updates.first_name !== undefined) {
+    fields.push(`first_name = $${n++}`);
+    params.push(asNullIfEmpty(updates.first_name));
+  }
+  if (updates.last_name !== undefined) {
+    fields.push(`last_name = $${n++}`);
+    params.push(asNullIfEmpty(updates.last_name));
+  }
+  if (withPhone && updates.phone_number !== undefined) {
+    fields.push(`phone_number = $${n++}`);
+    params.push(asNullIfEmpty(updates.phone_number));
+  }
+  if (updates.timezone !== undefined) {
+    fields.push(`timezone = $${n++}`);
+    params.push(asNullIfEmpty(updates.timezone));
+  }
+  if (updates.is_admin !== undefined) {
+    fields.push(`is_admin = $${n++}`);
+    params.push(Boolean(updates.is_admin));
+  }
+  if (fields.length === 0) {
+    return getUserById(userId);
+  }
+  params.push(userId);
+  const returning = withPhone
+    ? 'RETURNING user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin, created_at'
+    : 'RETURNING user_id, email, first_name, last_name, timezone, google_calendar_id, is_admin, created_at';
+  const result = await pool.query(
+    `UPDATE "User" SET ${fields.join(', ')} WHERE user_id = $${n} ${returning}`,
+    params
 export async function updateUserStreakType(userId, streakType) {
   if (!(await streakTypeColumnExists())) {
     return null;
@@ -684,6 +747,21 @@ export async function updateUserStreakType(userId, streakType) {
   const row = result.rows[0];
   if (row && !withPhone) row.phone_number = null;
   return row;
+}
+
+export async function deleteUserById(userId) {
+  const result = await pool.query(`DELETE FROM "User" WHERE user_id = $1 RETURNING user_id`, [userId]);
+  return result.rows[0] || null;
+}
+
+export async function ensureDefaultAdminUser() {
+  const check = await pool.query(`SELECT 1 FROM "User" WHERE email = $1 LIMIT 1`, [DEFAULT_ADMIN_EMAIL]);
+  if (check.rows.length > 0) return;
+  const password_hash = await hashPassword('admin');
+  await pool.query(`INSERT INTO "User" (email, password_hash, is_admin) VALUES ($1, $2, true)`, [
+    DEFAULT_ADMIN_EMAIL,
+    password_hash,
+  ]);
 }
 
 export async function getBedtimeReminderSettings(userId) {
@@ -817,12 +895,14 @@ export async function upsertBedtimeReminderSettings(
 
 export async function getActiveBedtimeReminders() {
   const withPhone = await userPhoneNumberColumnExists();
+  const withMethod = await reminderMethodColumnExists();
   const phoneSelect = withPhone ? 'u.phone_number' : 'NULL::varchar AS phone_number';
+  const methodSelect = withMethod ? 'r.method' : `'email'::varchar AS method`;
   const result = await pool.query(
     `SELECT
        r.reminder_id,
        r.user_id,
-       r.method,
+       ${methodSelect},
        r.minutes_before_bedtime,
        r.enabled,
        r.last_sent_at,

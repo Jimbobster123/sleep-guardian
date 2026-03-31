@@ -1,3 +1,5 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
@@ -20,6 +22,7 @@ import { useAuth, type StreakType } from "@/contexts/AuthContext";
 import { useApp } from "@/contexts/AppContext";
 import { useSleepCheckIn } from "@/contexts/SleepCheckInContext";
 import { useTheme } from "@/contexts/ThemeContext";
+import { LogOut, Zap, Sun, Moon, Shield } from "lucide-react";
 import { LogOut, Zap, Sun, Moon, ClipboardList } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { TIMEZONE_OPTIONS } from "@/lib/timezones";
@@ -417,6 +420,15 @@ export default function Profile() {
     <div>
       <PageHeader title="Profile" compact />
       <div className="px-5 -mt-2 space-y-4 pb-6">
+        {user?.is_admin ? (
+          <Link
+            to="/admin"
+            className="flex items-center gap-2 rounded-xl border border-border/50 bg-card px-4 py-3 text-sm font-medium text-foreground shadow-sm hover:bg-muted/40 transition-colors"
+          >
+            <Shield className="h-4 w-4 text-accent shrink-0" aria-hidden />
+            Admin — users and OKR
+          </Link>
+        ) : null}
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50 flex items-center gap-3 overflow-visible">
           <Avatar className="w-10 h-10 border border-border/50">
             {displayPhotoUrl ? <AvatarImage src={displayPhotoUrl} alt="Profile photo" /> : null}

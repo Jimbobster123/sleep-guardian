@@ -54,6 +54,7 @@ psql -U postgres -d luna -f db/migrations/005_remove_task_due_calendar_events.sq
 psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
 psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
 psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
+psql -U postgres -d luna -f db/migrations/009_user_is_admin.sql
 psql -U postgres -d luna -f db/migrations/009_daily_sleep_log.sql
 psql -U postgres -d luna -f db/migrations/010_daily_sleep_log_latency_nullable.sql
 psql -U postgres -d luna -f db/migrations/011_user_streak_type.sql
@@ -145,6 +146,47 @@ Or create your own account via the signup page.
 
 ---
 
+## Admin account and migration 009
+
+Admin features (user management, onboarding OKR metric) require the **`User.is_admin`** column from **migration 009**.
+
+### New installs
+
+If you follow [Step 3](#3-set-up-the-database) and run every migration file in order, **009** is already applied. Nothing extra to do.
+
+### Existing databases (upgrade)
+
+If you created the database before migration 009 existed, run:
+
+```bash
+psql -U postgres -d luna -f db/migrations/009_user_is_admin.sql
+```
+
+Restart the backend afterward. Without this column, admin APIs and login may fail until the migration is applied.
+
+### Default admin user
+
+After **009** is applied, the first time the API starts with a working database connection it **creates** a built-in admin account if one does not already exist:
+
+| Field | Value |
+|--------|--------|
+| Email | `admin@sleep-guardian.local` |
+| Password | `admin` |
+| Admin flag | `true` |
+
+### Logging in as admin
+
+On the sign-in screen, use either:
+
+- **Username-style shortcut**: `admin` in the email field, password `admin` (the API maps this to `admin@sleep-guardian.local`), or  
+- **Full email**: `admin@sleep-guardian.local` with password `admin`.
+
+Then open **Profile** and use **Admin — users and OKR**, or go to **`/admin`**.
+
+**Security:** These credentials are for local development and demos. Change the password or restrict access before any production deployment.
+
+---
+
 ## Keeping Up to Date
 
 ```bash
@@ -158,7 +200,7 @@ git pull
 
 Then re-run `npm install` in both `frontend/` and `backend/` in case dependencies changed.
 
-If the backend fails to start due to a missing column, re-run the migrations in Step 3 — teammates may have added a new migration.
+If the backend fails to start due to a missing column, re-run the migrations in Step 3 — teammates may have added a new migration. For **`column "is_admin" does not exist`**, run **migration 009** (see [Admin account and migration 009](#admin-account-and-migration-009)).
 
 ---
 
@@ -274,6 +316,7 @@ psql -U postgres -d luna -f db/migrations/005_remove_task_due_calendar_events.sq
 psql -U postgres -d luna -f db/migrations/006_recurrence_series.sql
 psql -U postgres -d luna -f db/migrations/007_onboarding_okr_timestamps.sql
 psql -U postgres -d luna -f db/migrations/008_reminder_delivery_contacts.sql
+psql -U postgres -d luna -f db/migrations/009_user_is_admin.sql
 psql -U postgres -d luna -f db/migrations/009_daily_sleep_log.sql
 psql -U postgres -d luna -f db/migrations/010_daily_sleep_log_latency_nullable.sql
 psql -U postgres -d luna -f db/migrations/011_user_streak_type.sql

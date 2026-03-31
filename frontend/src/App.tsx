@@ -19,6 +19,8 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import OnboardingSleepGoal from "./pages/OnboardingSleepGoal";
 import Profile from "./pages/Profile";
+import AdminPage from "./pages/AdminPage";
+import RequireAdmin from "./components/RequireAdmin";
 import Landing from "./pages/Landing";
 
 const queryClient = new QueryClient();
@@ -91,6 +93,16 @@ const App = () => (
                     element={
                       <RequireAuth requireSleepSetup={false}>
                         <MenuPage />
+                      </RequireAuth>
+                    }
+                  />
+                  <Route
+                    path="/admin"
+                    element={
+                      <RequireAuth requireSleepSetup={false}>
+                        <RequireAdmin>
+                          <AdminPage />
+                        </RequireAdmin>
                       </RequireAuth>
                     }
                   />
