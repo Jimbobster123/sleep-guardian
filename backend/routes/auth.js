@@ -2,7 +2,13 @@ import express from 'express';
 import crypto from 'crypto';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import pool from '../db.js';
-import { createSession, getUserByEmail, revokeSession, userPhoneNumberColumnExists } from '../queries.js';
+import {
+  createSession,
+  DEFAULT_ADMIN_EMAIL,
+  getUserByEmail,
+  revokeSession,
+  userPhoneNumberColumnExists,
+} from '../queries.js';
 import { getMeUserPayload } from '../sleep/streak.js';
 
 const router = express.Router();
@@ -20,6 +26,13 @@ function normalizeEmail(email) {
   return String(email || '')
     .trim()
     .toLowerCase();
+}
+
+/** Maps bare `admin` to the default admin account email. */
+function normalizeLoginEmail(email) {
+  const n = String(email || '').trim().toLowerCase();
+  if (n === 'admin') return DEFAULT_ADMIN_EMAIL;
+  return normalizeEmail(email);
 }
 
 function passwordMeetsMinimum(password) {
@@ -58,7 +71,7 @@ router.post('/signup', async (req, res) => {
       ? await client.query(
           `INSERT INTO "User" (email, password_hash, first_name, last_name, phone_number, timezone)
            VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING user_id, email, first_name, last_name, phone_number, timezone, created_at`,
+           RETURNING user_id, email, first_name, last_name, phone_number, timezone, created_at, is_admin`,
           [
             normalizedEmail,
             password_hash,
@@ -71,7 +84,7 @@ router.post('/signup', async (req, res) => {
       : await client.query(
           `INSERT INTO "User" (email, password_hash, first_name, last_name, timezone)
            VALUES ($1, $2, $3, $4, $5)
-           RETURNING user_id, email, first_name, last_name, timezone, created_at`,
+           RETURNING user_id, email, first_name, last_name, timezone, created_at, is_admin`,
           [
             normalizedEmail,
             password_hash,
@@ -82,6 +95,7 @@ router.post('/signup', async (req, res) => {
         );
     const user = userInsert.rows[0];
     if (!hasPhoneCol && user) user.phone_number = null;
+    if (user) user.is_admin = Boolean(user.is_admin);
 
     const session_token = newSessionToken();
     const expires_at = sessionExpiryDate();
@@ -110,7 +124,7 @@ router.post('/signup', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
-    const normalizedEmail = normalizeEmail(email);
+    const normalizedEmail = normalizeLoginEmail(email);
     if (!isValidEmail(normalizedEmail)) return res.status(400).json({ error: 'Invalid email' });
     if (typeof password !== 'string') return res.status(400).json({ error: 'Invalid password' });
 
@@ -141,6 +155,7 @@ router.post('/login', async (req, res) => {
       last_name: userRecord.last_name,
       phone_number: userRecord.phone_number,
       timezone: userRecord.timezone,
+      is_admin: Boolean(userRecord.is_admin),
       streak_type: 'RECORDING',
       streak_days: 0,
       streak_days_recording: 0,

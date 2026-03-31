@@ -10,6 +10,7 @@ export type User = {
   last_name?: string | null;
   phone_number?: string | null;
   timezone?: string | null;
+  is_admin?: boolean;
   /** How streak is counted; default RECORDING if absent (older API responses). */
   streak_type?: StreakType | null;
   /** Consecutive days for the active streak_type (duplicate of one of the two below). */

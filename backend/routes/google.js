@@ -1,12 +1,17 @@
 import express from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { getUserBySessionToken } from '../queries.js';
-import { createGoogleAuthUrl, handleGoogleOAuthCallback, syncGoogleToLocal } from '../google/calendar.js';
+import { createGoogleAuthUrl, handleGoogleOAuthCallback, isGoogleSyncEnabled, syncGoogleToLocal } from '../google/calendar.js';
 
 const router = express.Router();
 
 router.get('/auth-url', requireAuth, (req, res) => {
   try {
+    if (!isGoogleSyncEnabled()) {
+      return res.status(503).json({
+        error: 'Google integration is disabled right now. Set GOOGLE_SYNC_ENABLED=true to re-enable.',
+      });
+    }
     const url = createGoogleAuthUrl(req.sessionToken);
     res.json({ url });
   } catch (err) {
@@ -16,6 +21,9 @@ router.get('/auth-url', requireAuth, (req, res) => {
 
 router.get('/oauth2callback', async (req, res) => {
   try {
+    if (!isGoogleSyncEnabled()) {
+      return res.status(503).send('Google integration is currently disabled.');
+    }
     const code = String(req.query.code || '');
     const state = String(req.query.state || '');
     if (!code || !state) return res.status(400).send('Missing code or state');
@@ -40,6 +48,11 @@ router.get('/oauth2callback', async (req, res) => {
 
 router.post('/sync', requireAuth, async (req, res) => {
   try {
+    if (!isGoogleSyncEnabled()) {
+      return res.status(503).json({
+        error: 'Google sync is disabled right now. Set GOOGLE_SYNC_ENABLED=true to re-enable.',
+      });
+    }
     const user = req.user;
     const { timeMin, timeMax } = req.body || {};
     const now = new Date();

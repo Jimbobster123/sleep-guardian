@@ -785,6 +785,7 @@ router.post('/calendar-events', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
     const ignoreSleepValidation = Boolean(body.ignore_sleep_validation);
+    const isAllDay = Boolean(body.is_all_day);
     const start = parseDateInput(body.start_datetime);
     const end = parseDateInput(body.end_datetime);
     if (!start || !end || end <= start) {
@@ -801,7 +802,7 @@ router.post('/calendar-events', requireAuth, async (req, res) => {
     const seriesId = body.repeat && body.repeat !== 'none' && instances.length > 1 ? randomUUID() : null;
     const createdEvents = [];
     for (const instance of instances) {
-      if (!ignoreSleepValidation) {
+      if (!ignoreSleepValidation && !isAllDay) {
         const valid = await validateSchedule({
           userId: req.user.user_id,
           start: instance.start,
