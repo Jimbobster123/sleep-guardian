@@ -11,7 +11,7 @@ import {
   Clock3,
   Trash2,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { format, addDays, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, eachDayOfInterval, isSameDay, isSameMonth, isToday } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { ApiError, apiJson } from '@/lib/api';
@@ -169,11 +169,10 @@ const CalendarPage = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [createTitle, setCreateTitle] = useState('');
   const [createDescription, setCreateDescription] = useState('');
-  const [createEventDate, setCreateEventDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
-  const [createStartTime, setCreateStartTime] = useState('09:00');
-  const [createEndDate, setCreateEndDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
-  const [createEndTime, setCreateEndTime] = useState('10:00');
-  const createStartTimeRef = useRef('09:00');
+  const [createEventDate, setCreateEventDate] = useState('');
+  const [createStartTime, setCreateStartTime] = useState('');
+  const [createEndDate, setCreateEndDate] = useState('');
+  const [createEndTime, setCreateEndTime] = useState('');
   const [createAllDay, setCreateAllDay] = useState(false);
   const [createRepeat, setCreateRepeat] = useState<'none' | 'daily' | 'weekdays' | 'weekly'>('none');
   const [createRepeatCount, setCreateRepeatCount] = useState(5);
@@ -249,15 +248,20 @@ const CalendarPage = () => {
     };
   }, [token, fetchRange.from, fetchRange.to]);
 
-  createStartTimeRef.current = createStartTime;
-
   useEffect(() => {
     if (!createOpen) return;
-    setCreateEventDate(dateStr);
-    const { endDate, endTime } = defaultEndOneHourAfterStart(dateStr, createStartTimeRef.current, zone);
-    setCreateEndDate(endDate);
-    setCreateEndTime(endTime);
-  }, [createOpen, dateStr, zone]);
+    setCreateTitle('');
+    setCreateDescription('');
+    setCreateEventDate('');
+    setCreateStartTime('');
+    setCreateEndDate('');
+    setCreateEndTime('');
+    setCreateAllDay(false);
+    setCreateRepeat('none');
+    setCreateRepeatCount(5);
+    setCreateRepeatUntil('');
+    setCreateError(null);
+  }, [createOpen]);
 
   const dow = day.getDay();
   const windowForDay = useMemo(() => {
@@ -858,14 +862,19 @@ const CalendarPage = () => {
                         onChange={(e) => {
                           const d = e.target.value;
                           setCreateEventDate(d);
-                          const { endDate, endTime } = defaultEndOneHourAfterStart(d, createStartTime, zone);
-                          setCreateEndDate(endDate);
-                          setCreateEndTime(endTime);
+                          if (d && createStartTime) {
+                            const { endDate, endTime } = defaultEndOneHourAfterStart(d, createStartTime, zone);
+                            setCreateEndDate(endDate);
+                            setCreateEndTime(endTime);
+                          } else if (!d) {
+                            setCreateEndDate('');
+                            setCreateEndTime('');
+                          }
                         }}
                         className="h-10 max-w-[220px]"
                       />
                       <p className="text-[10px] text-muted-foreground">
-                        Defaults to the day you are viewing; change it to schedule on another day.
+                        Leave blank to use the day you are viewing. If you also leave times blank, this saves as an all-day event.
                       </p>
                     </div>
 
@@ -890,9 +899,14 @@ const CalendarPage = () => {
                             onChange={(e) => {
                               const v = e.target.value;
                               setCreateStartTime(v);
-                              const { endDate, endTime } = defaultEndOneHourAfterStart(createEventDate, v, zone);
-                              setCreateEndDate(endDate);
-                              setCreateEndTime(endTime);
+                              if (createEventDate && v) {
+                                const { endDate, endTime } = defaultEndOneHourAfterStart(createEventDate, v, zone);
+                                setCreateEndDate(endDate);
+                                setCreateEndTime(endTime);
+                              } else if (!v) {
+                                setCreateEndDate('');
+                                setCreateEndTime('');
+                              }
                             }}
                             className="h-10"
                           />
@@ -991,16 +1005,40 @@ const CalendarPage = () => {
                       setCreating(true);
                       setCreateError(null);
                       const title = createTitle.trim();
-                      const start = createAllDay
-                        ? `${createEventDate} 00:00:00`
-                        : combineDateAndTimeForApi(createEventDate, createStartTime, zone);
-                      const end = createAllDay ? `${createEventDate} 23:59:59` : combineDateAndTimeForApi(createEndDate, createEndTime, zone);
+                      const effectiveEventDate = createEventDate || dateStr;
+                      const hasStartTime = Boolean(createStartTime);
+                      const hasEndTime = Boolean(createEndTime);
+                      const hasAnyTime = hasStartTime || hasEndTime;
+                      const shouldCreateAllDay = createAllDay || !hasAnyTime;
+
+                      if (!shouldCreateAllDay && !hasStartTime) {
+                        setCreateError('Please enter a start time.');
+                        setCreating(false);
+                        return;
+                      }
+
+                      const resolvedStartTime = shouldCreateAllDay ? '' : createStartTime;
+                      let resolvedEndDate = createEndDate || effectiveEventDate;
+                      let resolvedEndTime = createEndTime;
+
+                      if (!shouldCreateAllDay && !hasEndTime) {
+                        const fallbackEnd = defaultEndOneHourAfterStart(effectiveEventDate, resolvedStartTime, zone);
+                        resolvedEndDate = fallbackEnd.endDate;
+                        resolvedEndTime = fallbackEnd.endTime;
+                      }
+
+                      const start = shouldCreateAllDay
+                        ? `${effectiveEventDate} 00:00:00`
+                        : combineDateAndTimeForApi(effectiveEventDate, resolvedStartTime, zone);
+                      const end = shouldCreateAllDay
+                        ? `${effectiveEventDate} 23:59:59`
+                        : combineDateAndTimeForApi(resolvedEndDate, resolvedEndTime, zone);
                       const payload = {
                         title: title.length ? title : null,
                         description: createDescription.trim().length ? createDescription.trim() : null,
                         start_datetime: start,
                         end_datetime: end,
-                        is_all_day: createAllDay,
+                        is_all_day: shouldCreateAllDay,
                         source: 'manual',
                         status: 'scheduled',
                         repeat: createRepeat,
@@ -1023,9 +1061,10 @@ const CalendarPage = () => {
                         setCreateOpen(false);
                         setCreateTitle('');
                         setCreateDescription('');
-                        setCreateStartTime('09:00');
-                        setCreateEndDate(dateStr);
-                        setCreateEndTime('10:00');
+                        setCreateEventDate('');
+                        setCreateStartTime('');
+                        setCreateEndDate('');
+                        setCreateEndTime('');
                         setCreateAllDay(false);
                         setCreateRepeat('none');
                         setCreateRepeatCount(5);
@@ -1039,11 +1078,11 @@ const CalendarPage = () => {
                             title,
                             start_datetime: start,
                             end_datetime: end,
-                            event_date: createEventDate,
+                            event_date: effectiveEventDate,
                             repeat: createRepeat,
                             repeat_count: createRepeatCount,
                             repeat_until: createRepeatUntil || null,
-                            is_all_day: createAllDay,
+                            is_all_day: shouldCreateAllDay,
                             conflictCode: code,
                             message: err.message,
                             description: createDescription,
