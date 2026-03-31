@@ -130,3 +130,24 @@ CREATE TABLE "SleepLog" (
 
 CREATE INDEX idx_sleep_log_user_id ON "SleepLog"(user_id);
 CREATE INDEX idx_sleep_log_sleep_date ON "SleepLog"(sleep_date);
+
+-- Daily sleep check-in (one row per user per calendar day)
+CREATE TABLE IF NOT EXISTS "DailySleepLog" (
+  daily_sleep_log_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES "User"(user_id) ON DELETE CASCADE,
+  log_date DATE NOT NULL,
+  sleep_goal_hours DOUBLE PRECISION NOT NULL,
+  actual_sleep_hours DOUBLE PRECISION NOT NULL,
+  wake_up_count INTEGER NOT NULL DEFAULT 0,
+  mood VARCHAR(50) NOT NULL,
+  factors TEXT[] NOT NULL DEFAULT '{}',
+  latency_minutes INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT daily_sleep_log_user_date UNIQUE (user_id, log_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_sleep_log_user_date ON "DailySleepLog"(user_id, log_date DESC);
+
+-- User streak mode (see migration 011_user_streak_type.sql)
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS streak_type VARCHAR(20) NOT NULL DEFAULT 'RECORDING';

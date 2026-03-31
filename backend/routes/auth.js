@@ -9,8 +9,15 @@ import {
   revokeSession,
   userPhoneNumberColumnExists,
 } from '../queries.js';
+import { createSession, getUserByEmail, revokeSession, userPhoneNumberColumnExists } from '../queries.js';
+import { getMeUserPayload } from '../sleep/streak.js';
 
 const router = express.Router();
+
+function clientTimezoneHint(req) {
+  const h = req.get('X-Client-Timezone') || req.get('x-client-timezone');
+  return h && String(h).trim() ? String(h).trim() : undefined;
+}
 
 function isValidEmail(email) {
   return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -101,7 +108,8 @@ router.post('/signup', async (req, res) => {
 
     await client.query('COMMIT');
 
-    res.json({ token: session_token, user });
+    const me = await getMeUserPayload(user.user_id, clientTimezoneHint(req));
+    res.json({ token: session_token, user: me ?? user });
   } catch (err) {
     try {
       await client.query('ROLLBACK');
@@ -140,7 +148,8 @@ router.post('/login', async (req, res) => {
     const expires_at = sessionExpiryDate();
     await createSession({ userId: userRecord.user_id, sessionToken: session_token, expiresAt: expires_at });
 
-    const user = {
+    const me = await getMeUserPayload(userRecord.user_id, clientTimezoneHint(req));
+    const user = me ?? {
       user_id: userRecord.user_id,
       email: userRecord.email,
       first_name: userRecord.first_name,
@@ -148,6 +157,10 @@ router.post('/login', async (req, res) => {
       phone_number: userRecord.phone_number,
       timezone: userRecord.timezone,
       is_admin: Boolean(userRecord.is_admin),
+      streak_type: 'RECORDING',
+      streak_days: 0,
+      streak_days_recording: 0,
+      streak_days_goal_met: 0,
     };
     res.json({ token: session_token, user });
   } catch (err) {

@@ -76,6 +76,9 @@ let reminderMethodColumnExistsCache = null;
 /** True if `"Reminder".method` exists (migration 007). Older DBs omit this column. */
 export async function reminderMethodColumnExists() {
   if (reminderMethodColumnExistsCache != null) return reminderMethodColumnExistsCache;
+let streakTypeColumnExistsCache = null;
+export async function streakTypeColumnExists() {
+  if (streakTypeColumnExistsCache != null) return streakTypeColumnExistsCache;
   try {
     const result = await pool.query(
       `SELECT 1
@@ -90,6 +93,15 @@ export async function reminderMethodColumnExists() {
     reminderMethodColumnExistsCache = false;
   }
   return reminderMethodColumnExistsCache;
+         AND table_name = 'User'
+         AND column_name = 'streak_type'
+       LIMIT 1`
+    );
+    streakTypeColumnExistsCache = result.rows.length > 0;
+  } catch {
+    streakTypeColumnExistsCache = false;
+  }
+  return streakTypeColumnExistsCache;
 }
 
 // Get all tasks for a user
@@ -394,12 +406,17 @@ export async function getAllUsers() {
 export async function getUserById(userId) {
   try {
     const withPhone = await userPhoneNumberColumnExists();
+    const withStreak = await streakTypeColumnExists();
+    const streakCol = withStreak ? ', streak_type' : '';
     const cols = withPhone
       ? 'user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin, created_at'
       : 'user_id, email, first_name, last_name, timezone, google_calendar_id, is_admin, created_at';
+      ? `user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id${streakCol}`
+      : `user_id, email, first_name, last_name, timezone, google_calendar_id${streakCol}`;
     const result = await pool.query(`SELECT ${cols} FROM "User" WHERE user_id = $1`, [userId]);
     const row = result.rows[0];
     if (row && !withPhone) row.phone_number = null;
+    if (row && !withStreak) row.streak_type = 'RECORDING';
     return row;
   } catch (err) {
     console.error('Error fetching user:', err);
@@ -575,6 +592,16 @@ export async function updateUserGoogleIntegration(userId, { google_refresh_token
   return row;
 }
 
+export async function clearUserGoogleIntegration(userId) {
+  await pool.query(
+    `UPDATE "User"
+     SET google_refresh_token = NULL,
+         google_calendar_id = NULL
+     WHERE user_id = $1`,
+    [userId]
+  );
+}
+
 export async function createUser({ email, password_hash, first_name, last_name, timezone }) {
   const result = await pool.query(
     `INSERT INTO "User" (email, password_hash, first_name, last_name, timezone)
@@ -606,12 +633,15 @@ export async function revokeSession(sessionToken) {
 
 export async function getUserBySessionToken(sessionToken) {
   const withPhone = await userPhoneNumberColumnExists();
+  const withStreak = await streakTypeColumnExists();
   const nameAndTz = withPhone
     ? 'u.first_name, u.last_name, u.phone_number, u.timezone'
     : 'u.first_name, u.last_name, u.timezone';
+  const streakCol = withStreak ? ', u.streak_type' : '';
   const result = await pool.query(
     `SELECT u.user_id, u.email, ${nameAndTz},
             u.google_refresh_token, u.google_calendar_id, u.is_admin
+            u.google_refresh_token, u.google_calendar_id${streakCol}
      FROM "AuthSession" s
      JOIN "User" u ON u.user_id = s.user_id
      WHERE s.session_token = $1
@@ -621,6 +651,7 @@ export async function getUserBySessionToken(sessionToken) {
   );
   const row = result.rows[0];
   if (row && !withPhone) row.phone_number = null;
+  if (row && !withStreak) row.streak_type = 'RECORDING';
   return row;
 }
 
@@ -699,6 +730,19 @@ export async function updateUserByAdmin(userId, updates) {
   const result = await pool.query(
     `UPDATE "User" SET ${fields.join(', ')} WHERE user_id = $${n} ${returning}`,
     params
+export async function updateUserStreakType(userId, streakType) {
+  if (!(await streakTypeColumnExists())) {
+    return null;
+  }
+  const v = String(streakType).toUpperCase() === 'GOAL_MET' ? 'GOAL_MET' : 'RECORDING';
+  const withPhone = await userPhoneNumberColumnExists();
+  const returning = withPhone
+    ? 'RETURNING user_id, email, first_name, last_name, phone_number, timezone, streak_type, google_calendar_id'
+    : 'RETURNING user_id, email, first_name, last_name, timezone, streak_type, google_calendar_id';
+  const result = await pool.query(
+    `UPDATE "User" SET streak_type = $2 WHERE user_id = $1
+     ${returning}`,
+    [userId, v]
   );
   const row = result.rows[0];
   if (row && !withPhone) row.phone_number = null;
@@ -1269,4 +1313,85 @@ export async function getOnboardingSleepGoalReminderPercentage({ intervalDays = 
     denominator_count: Number(row.denominator_count),
     interval_days: intervalDays,
   };
+}
+
+export async function getDailySleepLogByDate(userId, logDate) {
+  const result = await pool.query(
+    `SELECT daily_sleep_log_id, user_id, log_date, sleep_goal_hours, actual_sleep_hours,
+            wake_up_count, mood, factors, latency_minutes, created_at, updated_at
+     FROM "DailySleepLog"
+     WHERE user_id = $1 AND log_date = $2::date
+     LIMIT 1`,
+    [userId, logDate]
+  );
+  return result.rows[0] || null;
+}
+
+export async function upsertDailySleepLog(userId, payload) {
+  const {
+    log_date,
+    sleep_goal_hours,
+    actual_sleep_hours,
+    wake_up_count,
+    mood,
+    factors,
+    latency_minutes,
+  } = payload;
+
+  const latResolved =
+    latency_minutes == null || latency_minutes === ''
+      ? null
+      : Math.max(0, Math.floor(Number(latency_minutes)));
+
+  const baseParams = [
+    userId,
+    log_date,
+    Number(sleep_goal_hours),
+    Number(actual_sleep_hours),
+    Math.max(0, Math.floor(Number(wake_up_count) || 0)),
+    String(mood),
+    Array.isArray(factors) ? factors.map(String) : [],
+  ];
+
+  const run = (lat) =>
+    pool.query(
+      `INSERT INTO "DailySleepLog"
+        (user_id, log_date, sleep_goal_hours, actual_sleep_hours, wake_up_count, mood, factors, latency_minutes)
+       VALUES ($1, $2::date, $3, $4, $5, $6, $7::text[], $8)
+       ON CONFLICT (user_id, log_date) DO UPDATE SET
+         sleep_goal_hours = EXCLUDED.sleep_goal_hours,
+         actual_sleep_hours = EXCLUDED.actual_sleep_hours,
+         wake_up_count = EXCLUDED.wake_up_count,
+         mood = EXCLUDED.mood,
+         factors = EXCLUDED.factors,
+         latency_minutes = EXCLUDED.latency_minutes,
+         updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [...baseParams, lat],
+    );
+
+  try {
+    const result = await run(latResolved);
+    return result.rows[0];
+  } catch (err) {
+    // Older DBs: latency_minutes NOT NULL (before migration 010). Retry once with 30 so the log still saves.
+    const code = err && typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : '';
+    if (latResolved == null && code === '23502') {
+      const retry = await run(30);
+      return retry.rows[0];
+    }
+    throw err;
+  }
+}
+
+export async function listDailySleepLogsInRange(userId, fromDate, toDate) {
+  const result = await pool.query(
+    `SELECT daily_sleep_log_id, user_id, log_date, sleep_goal_hours, actual_sleep_hours,
+            wake_up_count, mood, factors, latency_minutes, created_at, updated_at
+     FROM "DailySleepLog"
+     WHERE user_id = $1 AND log_date >= $2::date AND log_date <= $3::date
+     ORDER BY log_date ASC`,
+    [userId, fromDate, toDate],
+  );
+  return result.rows;
 }

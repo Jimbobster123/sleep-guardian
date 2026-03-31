@@ -22,7 +22,8 @@
     --secondary-foreground: 230 40% 15%;
 
     --muted: 225 15% 92%;
-    --muted-foreground: 225 10% 48%;
+    /* ~4.6:1 on white cards for small copy (WCAG AA body text) */
+    --muted-foreground: 225 12% 38%;
 
     --accent: 258 55% 58%;
     --accent-foreground: 0 0% 100%;
@@ -40,6 +41,8 @@
     --sleep: 258 50% 35%;
     --sleep-foreground: 258 30% 92%;
     --sleep-light: 225 45% 88%;
+    /* Wind-down: lighter & pinker than bluish sleep-light */
+    --wind-down-fill: 297 34% 95%;
     --wake: 155 50% 42%;
     --wake-foreground: 155 30% 10%;
     --wake-window: 38 92% 52%;
@@ -90,7 +93,8 @@
     --secondary-foreground: 225 20% 85%;
 
     --muted: 235 20% 16%;
-    --muted-foreground: 225 15% 55%;
+    /* Stronger than before on dark cards for AA contrast */
+    --muted-foreground: 225 12% 70%;
 
     --accent: 258 55% 62%;
     --accent-foreground: 0 0% 100%;
@@ -106,6 +110,7 @@
     --sleep: 258 50% 50%;
     --sleep-foreground: 258 30% 92%;
     --sleep-light: 225 40% 20%;
+    --wind-down-fill: 292 38% 27%;
     --wake: 155 45% 38%;
     --wake-foreground: 155 30% 90%;
     --wake-window: 38 85% 50%;
@@ -142,7 +147,7 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
     font-family: var(--font-body);
   }
 
@@ -151,7 +156,23 @@
   }
 }
 
-/* Night gradient for headers */
+/* App shell: calm “night” base + subtle “day energy” wash (decorative only; text stays on surfaces) */
+.luna-app-shell {
+  background-color: hsl(var(--background));
+  background-image:
+    radial-gradient(ellipse 100% 80% at 50% -30%, hsl(var(--accent) / 0.14), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 100% 40%, hsl(var(--consistency) / 0.1), transparent 50%),
+    radial-gradient(ellipse 55% 45% at 0% 85%, hsl(var(--wake-window) / 0.08), transparent 50%);
+}
+
+.dark .luna-app-shell {
+  background-image:
+    radial-gradient(ellipse 100% 70% at 50% -25%, hsl(var(--accent) / 0.18), transparent 55%),
+    radial-gradient(ellipse 65% 45% at 100% 35%, hsl(var(--consistency) / 0.12), transparent 48%),
+    radial-gradient(ellipse 50% 40% at 0% 90%, hsl(var(--wake-window) / 0.07), transparent 45%);
+}
+
+/* Night gradient for landing page and headers — sleep tones */
 .night-gradient {
   background: linear-gradient(
     135deg,
@@ -161,9 +182,96 @@
   );
 }
 
+.dark .night-gradient {
+  background: linear-gradient(
+    135deg,
+    hsl(var(--night-start)) 0%,
+    hsl(var(--night-mid)) 50%,
+    hsl(var(--night-end)) 100%
+  );
+}
+
+/* Decorative hero wash: motion only if user allows */
+@keyframes luna-aurora-drift {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    opacity: 0.42;
+    transform: translate3d(1%, -1%, 0) scale(1.02);
+  }
+}
+
+.luna-hero-aurora {
+  pointer-events: none;
+  background: radial-gradient(
+      ellipse 90% 70% at 20% 90%,
+      hsl(var(--accent) / 0.35) 0%,
+      transparent 55%
+    ),
+    radial-gradient(ellipse 70% 60% at 85% 30%, hsl(var(--consistency) / 0.25) 0%, transparent 50%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .luna-hero-aurora {
+    animation: luna-aurora-drift 14s ease-in-out infinite;
+  }
+}
+
+@keyframes luna-star-twinkle {
+  0%,
+  100% {
+    opacity: 0.22;
+  }
+  50% {
+    opacity: 0.92;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  circle.luna-hero-star-twinkle {
+    opacity: 0.45;
+    animation: luna-star-twinkle 3.6s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  circle.luna-hero-star-twinkle {
+    opacity: 0.65;
+  }
+}
+
+/* Lifted surfaces: static shadow; hover only tweaks border (no shadow jump) */
+.luna-card-interactive {
+  border-radius: calc(var(--radius) + 2px);
+  border: 1px solid hsl(var(--border) / 0.85);
+  background-color: hsl(var(--card));
+  box-shadow:
+    0 1px 0 hsl(var(--foreground) / 0.04),
+    0 10px 36px -14px hsl(258 50% 42% / 0.2),
+    0 4px 16px -8px hsl(235 55% 30% / 0.1);
+  transition: border-color 0.2s ease;
+}
+
+.luna-card-interactive:hover {
+  border-color: hsl(var(--accent) / 0.45);
+}
+
+.luna-card-interactive:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
 /* Sleep window highlight */
 .sleep-window-bg {
   background: hsl(var(--sleep-light));
+}
+
+/* Wind-down — flat pastel purple-pink (lighter than sleep; sleep stays blue-lavender) */
+.wind-down-bg {
+  background: hsl(var(--wind-down-fill));
 }
 
 .wake-window-bg {
@@ -208,6 +316,20 @@
 .animate-fade-in-delay-2 {
   animation: fade-in-up 0.4s ease-out 0.2s forwards;
   opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in,
+  .animate-fade-in-delay,
+  .animate-fade-in-delay-2 {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .gauge-animate {
+    animation: none !important;
+  }
 }
 
 /* Hide scrollbar for mobile feel */

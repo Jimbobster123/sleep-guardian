@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { AppProvider } from "@/contexts/AppContext";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { SleepCheckInProvider } from "@/contexts/SleepCheckInContext";
 import AppLayout from "@/components/AppLayout";
 import RequireAuth from "@/components/RequireAuth";
 import Index from "./pages/Index";
@@ -20,6 +21,7 @@ import OnboardingSleepGoal from "./pages/OnboardingSleepGoal";
 import Profile from "./pages/Profile";
 import AdminPage from "./pages/AdminPage";
 import RequireAdmin from "./components/RequireAdmin";
+import Landing from "./pages/Landing";
 
 const queryClient = new QueryClient();
 
@@ -31,9 +33,11 @@ const App = () => (
       <ThemeProvider>
         <AuthProvider>
           <AppProvider>
+            <SleepCheckInProvider>
             <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
               <AppLayout>
                 <Routes>
+                  <Route path="/" element={<Landing />} />
                   <Route path="/login" element={<Login />} />
                   <Route path="/signup" element={<Signup />} />
                   <Route
@@ -45,7 +49,7 @@ const App = () => (
                     }
                   />
                   <Route
-                    path="/"
+                    path="/home"
                     element={
                       <RequireAuth>
                         <Index />
@@ -106,6 +110,7 @@ const App = () => (
                 </Routes>
               </AppLayout>
             </BrowserRouter>
+            </SleepCheckInProvider>
           </AppProvider>
         </AuthProvider>
       </ThemeProvider>

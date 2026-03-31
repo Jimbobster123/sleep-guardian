@@ -19,7 +19,7 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const from = ((loc.state as LoginLocationState | null)?.from) || "/";
+  const from = ((loc.state as LoginLocationState | null)?.from) || "/home";
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

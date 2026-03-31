@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { requireAuth } from '../middleware/auth.js';
 import { parseIcs } from '../import/ics.js';
 import { buildScheduleSuggestions } from '../schedule/suggestions.js';
+import { buildSleepCheckinSummary } from '../sleep/checkinSummary.js';
 import { getProfilePhotoUrl, saveProfilePhoto } from '../profilePhotos.js';
 import {
   createOrUpdateSleepGoal,
@@ -26,14 +27,24 @@ import {
   getBedtimeReminderSettings,
   upsertBedtimeReminderSettings,
   updateUserProfile,
+  updateUserStreakType,
   deleteTaskCalendarEvents,
   upsertImportedCalendarEvent,
   upsertSleepWindow,
   upsertTaskCalendarEvent,
+  getDailySleepLogByDate,
+  upsertDailySleepLog,
+  listDailySleepLogsInRange,
 } from '../queries.js';
+import { getMeUserPayload } from '../sleep/streak.js';
 import { pushLocalEventToGoogle, deleteGoogleEventForLocal } from '../google/calendar.js';
 
 const router = express.Router();
+
+function clientTimezoneHint(req) {
+  const h = req.get('X-Client-Timezone') || req.get('x-client-timezone');
+  return h && String(h).trim() ? String(h).trim() : undefined;
+}
 const TEXT_REMINDERS_AVAILABLE = false;
 
 const VALID_GOAL_TYPES = new Set(['fixed_bedtime', 'fixed_wake_time', 'fixed_duration']);
@@ -47,6 +58,10 @@ function isNullableTimeString(value) {
 }
 
 const REPEAT_TYPES = new Set(['none', 'daily', 'weekdays', 'weekly']);
+
+const DAILY_SLEEP_MOODS = new Set(['exhausted', 'tired', 'okay', 'good', 'energized']);
+const DAILY_SLEEP_FACTORS = new Set(['Caffeine', 'Alcohol', 'Heavy Meal', 'Screen Time', 'Exercise', 'Stress']);
+const DAILY_SLEEP_LATENCY_MINUTES = new Set([15, 30, 45, 60]);
 
 function parseDateInput(value) {
   if (!value || typeof value !== 'string') return null;
@@ -217,19 +232,51 @@ async function validateSchedule({ userId, start, end, excludeEventId, excludeTas
 }
 
 router.get('/', requireAuth, async (req, res) => {
-  res.json({ user: req.user });
+  try {
+    const user = await getMeUserPayload(req.user.user_id, clientTimezoneHint(req));
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ user });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load profile', details: err.message });
+  }
 });
 
 router.put('/profile', requireAuth, async (req, res) => {
   try {
     const { email, first_name, last_name, phone_number, timezone } = req.body || {};
-    const user = await updateUserProfile(req.user.user_id, { email, first_name, last_name, phone_number, timezone });
+    await updateUserProfile(req.user.user_id, { email, first_name, last_name, phone_number, timezone });
+    const user = await getMeUserPayload(req.user.user_id, clientTimezoneHint(req));
+    if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ user });
   } catch (err) {
     if (err?.code === '23505') {
       return res.status(409).json({ error: 'Email already in use' });
     }
     res.status(500).json({ error: 'Failed to update profile', details: err.message });
+  }
+});
+
+router.patch('/profile', requireAuth, async (req, res) => {
+  try {
+    const { streak_type } = req.body || {};
+    if (streak_type === undefined || streak_type === null) {
+      return res.status(400).json({ error: 'streak_type is required (RECORDING or GOAL_MET)' });
+    }
+    const s = String(streak_type).toUpperCase();
+    if (s !== 'RECORDING' && s !== 'GOAL_MET') {
+      return res.status(400).json({ error: 'streak_type must be RECORDING or GOAL_MET' });
+    }
+    const updated = await updateUserStreakType(req.user.user_id, s);
+    if (!updated) {
+      return res.status(503).json({
+        error: 'Streak settings are not available until the database migration for streak_type has been applied.',
+      });
+    }
+    const user = await getMeUserPayload(req.user.user_id, clientTimezoneHint(req));
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ user });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update streak settings', details: err.message });
   }
 });
 
@@ -404,6 +451,123 @@ router.put('/sleep-goal', requireAuth, async (req, res) => {
     res.json({ goal, windows: upserted.length ? upserted : await getSleepWindows(goal.sleep_goal_id) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update sleep goal', details: err.message });
+  }
+});
+
+router.get('/daily-sleep-log', requireAuth, async (req, res) => {
+  try {
+    const date = req.query.date != null ? String(req.query.date).trim() : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'date query must be YYYY-MM-DD' });
+    }
+    const log = await getDailySleepLogByDate(req.user.user_id, date);
+    res.json({ log });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch daily sleep log', details: err.message });
+  }
+});
+
+router.get('/daily-sleep-logs', requireAuth, async (req, res) => {
+  try {
+    const from = req.query.from != null ? String(req.query.from).trim() : '';
+    const to = req.query.to != null ? String(req.query.to).trim() : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      return res.status(400).json({ error: 'from query must be YYYY-MM-DD' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ error: 'to query must be YYYY-MM-DD' });
+    }
+    if (from > to) {
+      return res.status(400).json({ error: 'from must be on or before to' });
+    }
+    const fromMs = Date.parse(`${from}T00:00:00Z`);
+    const toMs = Date.parse(`${to}T00:00:00Z`);
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+      return res.status(400).json({ error: 'Invalid date range' });
+    }
+    const spanDays = Math.ceil((toMs - fromMs) / 86400000) + 1;
+    if (spanDays > 366) {
+      return res.status(400).json({ error: 'Date range cannot exceed 366 days' });
+    }
+    const logs = await listDailySleepLogsInRange(req.user.user_id, from, to);
+    res.json({ logs });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch daily sleep logs', details: err.message });
+  }
+});
+
+router.get('/sleep-checkin-summary', requireAuth, async (req, res) => {
+  try {
+    const tz =
+      req.user.timezone && String(req.user.timezone).trim() ? req.user.timezone : null;
+    const summary = await buildSleepCheckinSummary(req.user.user_id, tz);
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load sleep check-in summary', details: err.message });
+  }
+});
+
+router.put('/daily-sleep-log', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const date = typeof body.date === 'string' ? body.date.trim() : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
+    const sleep_goal_hours = Number(body.sleep_goal_hours);
+    const actual_sleep_hours = Number(body.actual_sleep_hours);
+    if (!Number.isFinite(sleep_goal_hours) || sleep_goal_hours < 0 || sleep_goal_hours > 24) {
+      return res.status(400).json({ error: 'sleep_goal_hours must be a number between 0 and 24' });
+    }
+    if (!Number.isFinite(actual_sleep_hours) || actual_sleep_hours < 0 || actual_sleep_hours > 24) {
+      return res.status(400).json({ error: 'actual_sleep_hours must be a number between 0 and 24' });
+    }
+
+    const wake_up_count = Math.floor(Number(body.wake_up_count));
+    if (!Number.isInteger(wake_up_count) || wake_up_count < 0 || wake_up_count > 99) {
+      return res.status(400).json({ error: 'wake_up_count must be an integer from 0 to 99' });
+    }
+
+    const mood = typeof body.mood === 'string' ? body.mood.trim().toLowerCase() : '';
+    if (!DAILY_SLEEP_MOODS.has(mood)) {
+      return res.status(400).json({ error: 'mood must be one of exhausted, tired, okay, good, energized' });
+    }
+
+    if (!Array.isArray(body.factors)) {
+      return res.status(400).json({ error: 'factors must be an array of strings' });
+    }
+    const factors = body.factors.map((x) => String(x).trim()).filter(Boolean);
+    for (const f of factors) {
+      if (!DAILY_SLEEP_FACTORS.has(f)) {
+        return res.status(400).json({ error: `Invalid factor: ${f}` });
+      }
+    }
+
+    const rawLat = body.latency_minutes;
+    let latency_minutes = null;
+    if (rawLat != null && rawLat !== '') {
+      const n = Math.floor(Number(rawLat));
+      if (!DAILY_SLEEP_LATENCY_MINUTES.has(n)) {
+        return res.status(400).json({
+          error: 'latency_minutes must be null or one of 15, 30, 45, 60 when provided',
+        });
+      }
+      latency_minutes = n;
+    }
+
+    const log = await upsertDailySleepLog(req.user.user_id, {
+      log_date: date,
+      sleep_goal_hours,
+      actual_sleep_hours,
+      wake_up_count,
+      mood,
+      factors,
+      latency_minutes,
+    });
+    res.json({ log });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save daily sleep log', details: err.message });
   }
 });
 
@@ -621,6 +785,7 @@ router.post('/calendar-events', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
     const ignoreSleepValidation = Boolean(body.ignore_sleep_validation);
+    const isAllDay = Boolean(body.is_all_day);
     const start = parseDateInput(body.start_datetime);
     const end = parseDateInput(body.end_datetime);
     if (!start || !end || end <= start) {
@@ -637,7 +802,7 @@ router.post('/calendar-events', requireAuth, async (req, res) => {
     const seriesId = body.repeat && body.repeat !== 'none' && instances.length > 1 ? randomUUID() : null;
     const createdEvents = [];
     for (const instance of instances) {
-      if (!ignoreSleepValidation) {
+      if (!ignoreSleepValidation && !isAllDay) {
         const valid = await validateSchedule({
           userId: req.user.user_id,
           start: instance.start,
