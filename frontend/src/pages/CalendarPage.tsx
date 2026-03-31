@@ -412,7 +412,8 @@ const CalendarPage = () => {
 
   // Current time line: only for today, position based on hour (3am = 0)
   const [now, setNow] = useState(() => new Date());
-  const isViewingToday = dateStr === format(new Date(), 'yyyy-MM-dd');
+  const todayStrInZone = DateTime.now().setZone(zone).toFormat('yyyy-MM-dd');
+  const isViewingToday = dateStr === todayStrInZone;
   useEffect(() => {
     if (!isViewingToday) return;
     setNow(new Date());
@@ -679,6 +680,7 @@ const CalendarPage = () => {
                     <span className="font-medium text-foreground">{format(day, 'MMM')}</span>
                     <span className="text-muted-foreground">{format(day, 'd')}</span>
                     <span className="text-muted-foreground">{format(day, 'yyyy')}</span>
+                    {isViewingToday ? <span className="text-xs font-semibold text-red-500">Today</span> : null}
                   </>
                 )}
                 {viewMode === 'week' && (
@@ -690,13 +692,6 @@ const CalendarPage = () => {
                   <span className="font-medium text-foreground">{format(day, 'MMMM yyyy')}</span>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => setDay(new Date())}
-                className="text-xs font-medium text-accent hover:underline"
-              >
-                Today
-              </button>
             </div>
             <button
               className="p-1"
