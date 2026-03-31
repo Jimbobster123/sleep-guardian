@@ -76,9 +76,6 @@ let reminderMethodColumnExistsCache = null;
 /** True if `"Reminder".method` exists (migration 007). Older DBs omit this column. */
 export async function reminderMethodColumnExists() {
   if (reminderMethodColumnExistsCache != null) return reminderMethodColumnExistsCache;
-let streakTypeColumnExistsCache = null;
-export async function streakTypeColumnExists() {
-  if (streakTypeColumnExistsCache != null) return streakTypeColumnExistsCache;
   try {
     const result = await pool.query(
       `SELECT 1
@@ -93,6 +90,16 @@ export async function streakTypeColumnExists() {
     reminderMethodColumnExistsCache = false;
   }
   return reminderMethodColumnExistsCache;
+}
+
+let streakTypeColumnExistsCache = null;
+export async function streakTypeColumnExists() {
+  if (streakTypeColumnExistsCache != null) return streakTypeColumnExistsCache;
+  try {
+    const result = await pool.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
          AND table_name = 'User'
          AND column_name = 'streak_type'
        LIMIT 1`
@@ -409,10 +416,8 @@ export async function getUserById(userId) {
     const withStreak = await streakTypeColumnExists();
     const streakCol = withStreak ? ', streak_type' : '';
     const cols = withPhone
-      ? 'user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin, created_at'
-      : 'user_id, email, first_name, last_name, timezone, google_calendar_id, is_admin, created_at';
-      ? `user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id${streakCol}`
-      : `user_id, email, first_name, last_name, timezone, google_calendar_id${streakCol}`;
+      ? `user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin, created_at${streakCol}`
+      : `user_id, email, first_name, last_name, timezone, google_calendar_id, is_admin, created_at${streakCol}`;
     const result = await pool.query(`SELECT ${cols} FROM "User" WHERE user_id = $1`, [userId]);
     const row = result.rows[0];
     if (row && !withPhone) row.phone_number = null;
@@ -634,14 +639,11 @@ export async function revokeSession(sessionToken) {
 export async function getUserBySessionToken(sessionToken) {
   const withPhone = await userPhoneNumberColumnExists();
   const withStreak = await streakTypeColumnExists();
-  const nameAndTz = withPhone
-    ? 'u.first_name, u.last_name, u.phone_number, u.timezone'
-    : 'u.first_name, u.last_name, u.timezone';
+  const phoneCol = withPhone ? ', u.phone_number' : '';
   const streakCol = withStreak ? ', u.streak_type' : '';
   const result = await pool.query(
-    `SELECT u.user_id, u.email, ${nameAndTz},
-            u.google_refresh_token, u.google_calendar_id, u.is_admin
-            u.google_refresh_token, u.google_calendar_id${streakCol}
+    `SELECT u.user_id, u.email, u.first_name, u.last_name${phoneCol}, u.timezone,
+            u.google_refresh_token, u.google_calendar_id, u.is_admin${streakCol}
      FROM "AuthSession" s
      JOIN "User" u ON u.user_id = s.user_id
      WHERE s.session_token = $1
@@ -730,6 +732,10 @@ export async function updateUserByAdmin(userId, updates) {
   const result = await pool.query(
     `UPDATE "User" SET ${fields.join(', ')} WHERE user_id = $${n} ${returning}`,
     params
+  );
+  return result.rows[0];
+}
+
 export async function updateUserStreakType(userId, streakType) {
   if (!(await streakTypeColumnExists())) {
     return null;

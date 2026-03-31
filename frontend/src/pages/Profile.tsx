@@ -1,7 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,8 +20,7 @@ import { useAuth, type StreakType } from "@/contexts/AuthContext";
 import { useApp } from "@/contexts/AppContext";
 import { useSleepCheckIn } from "@/contexts/SleepCheckInContext";
 import { useTheme } from "@/contexts/ThemeContext";
-import { LogOut, Zap, Sun, Moon, Shield } from "lucide-react";
-import { LogOut, Zap, Sun, Moon, ClipboardList } from "lucide-react";
+import { ClipboardList, LogOut, Moon, Shield, Sun, Zap } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { TIMEZONE_OPTIONS } from "@/lib/timezones";
 import { streakGoalMetDisplay, streakRecordingDisplay } from "@/lib/streakDisplay";

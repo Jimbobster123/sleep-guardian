@@ -9,7 +9,6 @@ import {
   revokeSession,
   userPhoneNumberColumnExists,
 } from '../queries.js';
-import { createSession, getUserByEmail, revokeSession, userPhoneNumberColumnExists } from '../queries.js';
 import { getMeUserPayload } from '../sleep/streak.js';
 
 const router = express.Router();
