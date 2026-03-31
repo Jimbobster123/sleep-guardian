@@ -574,6 +574,16 @@ export async function updateUserGoogleIntegration(userId, { google_refresh_token
   return row;
 }
 
+export async function clearUserGoogleIntegration(userId) {
+  await pool.query(
+    `UPDATE "User"
+     SET google_refresh_token = NULL,
+         google_calendar_id = NULL
+     WHERE user_id = $1`,
+    [userId]
+  );
+}
+
 export async function createUser({ email, password_hash, first_name, last_name, timezone }) {
   const result = await pool.query(
     `INSERT INTO "User" (email, password_hash, first_name, last_name, timezone)
