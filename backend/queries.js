@@ -278,35 +278,39 @@ export async function createTask(userId, task) {
   }
 }
 
+/** Naive SQL timestamps for task times — match calendar/app (wall clock), not UTC-shifted. */
 function normalizeTaskPlannedTimestamp(v) {
   if (v == null || v === '') return null;
   if (typeof v === 'string') {
-    const s = v.replace('T', ' ').trim().replace(/Z$/i, '');
-    const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+    const s = String(v).trim().replace('T', ' ').replace(/Z$/i, '');
+    const dot = s.indexOf('.');
+    const base = dot >= 0 ? s.slice(0, dot) : s;
+    const m = base.match(/^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
     if (!m) return null;
+    if (m[2] == null) return null;
     const sec = m[4] != null ? m[4] : '00';
     return `${m[1]} ${m[2]}:${m[3]}:${sec}`;
   }
   if (v instanceof Date && !Number.isNaN(v.getTime())) {
     const pad = (n) => String(n).padStart(2, '0');
+    // Treat DB-naive timestamp as a wall-clock string (use UTC getters to preserve the stored components).
     return `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())} ${pad(v.getUTCHours())}:${pad(v.getUTCMinutes())}:${pad(v.getUTCSeconds())}`;
   }
   return null;
 }
+
+/** Fixed calendar length for the "due" marker (work block uses estimated_minutes). */
+const TASK_DUE_CALENDAR_DURATION_MIN = 15;
 
 export async function upsertTaskCalendarEvent(userId, task) {
   if (!task || !task.task_id) return null;
 
   const minutes = Number(task.estimated_minutes || 0);
   const startStr = normalizeTaskPlannedTimestamp(task.planned_datetime);
+  const dueStr = normalizeTaskPlannedTimestamp(task.due_datetime);
 
   let plannedUpdated = null;
-
-  // Remove due-date calendar events; tasks only appear when planned
-  await pool.query(
-    `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
-    [userId, task.task_id, 'task_due']
-  );
+  let dueUpdated = null;
 
   // Cleanup legacy combined task event entries (source='task').
   await pool.query(
@@ -370,7 +374,66 @@ export async function upsertTaskCalendarEvent(userId, task) {
     );
   }
 
-  return plannedUpdated;
+  // Due marker on calendar at deadline (even when there is no planned work block).
+  // Always upsert when due_datetime exists; if it overlaps planned start, we still keep it
+  // so the user sees the deadline after dragging.
+  if (dueStr) {
+    const dueDur = TASK_DUE_CALENDAR_DURATION_MIN;
+    const existingDue = await pool.query(
+      `SELECT event_id FROM "CalendarEvent"
+       WHERE user_id = $1 AND task_id = $2 AND source = $3
+       LIMIT 1`,
+      [userId, task.task_id, 'task_due']
+    );
+
+    if (existingDue.rows[0]) {
+      const result = await pool.query(
+        `UPDATE "CalendarEvent"
+         SET title = $3,
+             description = $4,
+             start_datetime = $5::timestamp,
+             end_datetime = $5::timestamp + ($6::int * interval '1 minute'),
+             status = $7
+         WHERE event_id = $1 AND user_id = $2
+         RETURNING *`,
+        [
+          existingDue.rows[0].event_id,
+          userId,
+          asNullIfEmpty(task.title),
+          asNullIfEmpty(task.notes),
+          dueStr,
+          dueDur,
+          asNullIfEmpty(task.status) || 'scheduled',
+        ]
+      );
+      dueUpdated = result.rows[0];
+    } else {
+      const result = await pool.query(
+        `INSERT INTO "CalendarEvent"
+         (user_id, task_id, title, description, start_datetime, end_datetime, status, source)
+         VALUES ($1, $2, $3, $4, $5::timestamp, $5::timestamp + ($6::int * interval '1 minute'), $7, $8)
+         RETURNING *`,
+        [
+          userId,
+          task.task_id,
+          asNullIfEmpty(task.title),
+          asNullIfEmpty(task.notes),
+          dueStr,
+          dueDur,
+          asNullIfEmpty(task.status) || 'scheduled',
+          'task_due',
+        ]
+      );
+      dueUpdated = result.rows[0];
+    }
+  } else {
+    await pool.query(
+      `DELETE FROM "CalendarEvent" WHERE user_id = $1 AND task_id = $2 AND source = $3`,
+      [userId, task.task_id, 'task_due']
+    );
+  }
+
+  return plannedUpdated || dueUpdated;
 }
 
 export async function deleteTaskCalendarEvents(userId, taskId) {

@@ -73,6 +73,103 @@ export function estimateSleepGoalHoursForLastNight(summary: SummaryLike, zone: s
 }
 
 /**
+ * Target hours for the night before a given wake date (wakeDate = the date the user is logging, YYYY-MM-DD).
+ * The "night" starts on the previous calendar day in the user's zone.
+ */
+export function estimateSleepGoalHoursForWakeDate(summary: SummaryLike, zone: string, wakeDateYmd: string): number {
+  const wake = DateTime.fromFormat(wakeDateYmd, 'yyyy-MM-dd', { zone }).startOf('day');
+  if (!wake.isValid) return estimateSleepGoalHoursForLastNight(summary, zone);
+  const bedDate = wake.minus({ days: 1 });
+  return estimateSleepGoalHoursForNightStartingOn(summary, bedDate);
+}
+
+/** Bed → wake labels for the night before a given wake date. */
+export function formatBedWakeRangeForWakeDate(summary: SummaryLike, zone: string, wakeDateYmd: string): string | null {
+  const wake = DateTime.fromFormat(wakeDateYmd, 'yyyy-MM-dd', { zone }).startOf('day');
+  if (!wake.isValid) return formatPreviousNightBedWakeRange(summary, zone);
+  const bedDate = wake.minus({ days: 1 });
+  const yesterdayDow = apiDayOfWeek(bedDate);
+  const win = summary?.windows?.find((w) => Number(w.day_of_week) === yesterdayDow);
+  if (win?.start_time && win?.end_time) {
+    const a = formatWallTime12h(win.start_time);
+    const b = formatWallTime12h(win.end_time);
+    if (a && b) return `${a} – ${b}`;
+  }
+  const g = summary?.goal;
+  if (g?.target_bedtime && g?.target_wake_time) {
+    const a = formatWallTime12h(g.target_bedtime);
+    const b = formatWallTime12h(g.target_wake_time);
+    if (a && b) return `${a} – ${b}`;
+  }
+  return null;
+}
+
+/**
+ * Planned bed and wake times for the night before a given wake date.
+ * Mirrors `getPreviousNightPlanBedWakeDateTimes`, but anchored to `wakeDateYmd`.
+ */
+export function getPlanBedWakeDateTimesForWakeDate(
+  summary: SummaryLike,
+  zone: string,
+  wakeDateYmd: string,
+): { bed: DateTime; wake: DateTime } | null {
+  if (summary == null) return null;
+  const wakeDay = DateTime.fromFormat(wakeDateYmd, 'yyyy-MM-dd', { zone }).startOf('day');
+  if (!wakeDay.isValid) return getPreviousNightPlanBedWakeDateTimes(summary, zone);
+
+  const bedDay = wakeDay.minus({ days: 1 });
+  const bedDow = apiDayOfWeek(bedDay);
+  const win = summary.windows?.find((w) => Number(w.day_of_week) === bedDow);
+  const g = summary.goal;
+
+  let bedM: number | null = null;
+  let wakeM: number | null = null;
+
+  if (win?.start_time && win?.end_time) {
+    bedM = parseTimeToMinutes(win.start_time);
+    wakeM = parseTimeToMinutes(win.end_time);
+  } else if (g?.target_bedtime && g?.target_wake_time) {
+    bedM = parseTimeToMinutes(g.target_bedtime);
+    wakeM = parseTimeToMinutes(g.target_wake_time);
+  }
+
+  if (bedM != null && wakeM != null) {
+    const bed = bedDay.set({
+      hour: Math.floor(bedM / 60),
+      minute: bedM % 60,
+      second: 0,
+      millisecond: 0,
+    });
+    let wake = wakeDay.set({
+      hour: Math.floor(wakeM / 60),
+      minute: wakeM % 60,
+      second: 0,
+      millisecond: 0,
+    });
+    if (wake <= bed) wake = wake.plus({ days: 1 });
+    return { bed, wake };
+  }
+
+  if (g?.goal_type === 'fixed_duration' && g.target_sleep_minutes != null && Number(g.target_sleep_minutes) > 0) {
+    const wakeFromGoal = parseTimeToMinutes(g.target_wake_time);
+    const wake = wakeDay.set({
+      hour: wakeFromGoal != null ? Math.floor(wakeFromGoal / 60) : 7,
+      minute: wakeFromGoal != null ? wakeFromGoal % 60 : 0,
+      second: 0,
+      millisecond: 0,
+    });
+    const bed = wake.minus({ minutes: Number(g.target_sleep_minutes) });
+    return { bed, wake };
+  }
+
+  const hours = estimateSleepGoalHoursForWakeDate(summary, zone, wakeDateYmd);
+  if (!Number.isFinite(hours) || hours <= 0 || hours > 20) return null;
+  const wake = wakeDay.set({ hour: 7, minute: 0, second: 0, millisecond: 0 });
+  const bed = wake.minus({ hours });
+  return { bed, wake };
+}
+
+/**
  * Bed → wake labels for the night that started yesterday (local), from weekly windows or goal defaults.
  */
 export function formatPreviousNightBedWakeRange(summary: SummaryLike, zone: string): string | null {

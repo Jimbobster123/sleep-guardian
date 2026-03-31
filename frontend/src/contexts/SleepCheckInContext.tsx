@@ -13,8 +13,11 @@ import { ApiError, apiJson } from '@/lib/api';
 import { effectiveTimeZone } from '@/lib/calendarTime';
 import {
   estimateSleepGoalHoursForLastNight,
+  estimateSleepGoalHoursForWakeDate,
+  formatBedWakeRangeForWakeDate,
   formatPreviousNightBedWakeRange,
   getPreviousNightPlanBedWakeDateTimes,
+  getPlanBedWakeDateTimesForWakeDate,
   hoursBetweenBedAndWake,
 } from '@/lib/sleepGoalHours';
 import {
@@ -88,7 +91,7 @@ type SleepCheckInContextValue = {
   todayLog: DailySleepLogRow | null;
   loadingLog: boolean;
   goalHours: number;
-  openModal: () => void;
+  openModal: (dateYmd?: string) => void;
   dismissForSession: () => void;
   refreshLog: () => Promise<void>;
 };
@@ -105,10 +108,13 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
   const { token, user, refreshMe } = useAuth();
   const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const todayStr = useMemo(() => DateTime.now().setZone(zone).toFormat('yyyy-MM-dd'), [zone]);
+  const [modalDateStr, setModalDateStr] = useState<string>(todayStr);
 
   const [isOpen, setIsOpen] = useState(false);
   const [todayLog, setTodayLog] = useState<DailySleepLogRow | null>(null);
   const [loadingLog, setLoadingLog] = useState(false);
+  const [modalLog, setModalLog] = useState<DailySleepLogRow | null>(null);
+  const [loadingModalLog, setLoadingModalLog] = useState(false);
   const [sleepSummary, setSleepSummary] = useState<SleepGoalSummary | null>(null);
 
   const [actualSleep, setActualSleep] = useState(8);
@@ -128,15 +134,17 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
     () => estimateSleepGoalHoursForLastNight(sleepSummary, zone),
     [sleepSummary, zone],
   );
-  const previousNightBedWake = useMemo(
-    () => formatPreviousNightBedWakeRange(sleepSummary, zone),
-    [sleepSummary, zone],
-  );
+  const previousNightBedWake = useMemo(() => {
+    return modalDateStr === todayStr
+      ? formatPreviousNightBedWakeRange(sleepSummary, zone)
+      : formatBedWakeRangeForWakeDate(sleepSummary, zone, modalDateStr);
+  }, [sleepSummary, zone, modalDateStr, todayStr]);
 
-  const planBedWake = useMemo(
-    () => getPreviousNightPlanBedWakeDateTimes(sleepSummary, zone),
-    [sleepSummary, zone],
-  );
+  const planBedWake = useMemo(() => {
+    return modalDateStr === todayStr
+      ? getPreviousNightPlanBedWakeDateTimes(sleepSummary, zone)
+      : getPlanBedWakeDateTimesForWakeDate(sleepSummary, zone, modalDateStr);
+  }, [sleepSummary, zone, modalDateStr, todayStr]);
 
   const actualBedWakeFromOffsets = useMemo(() => {
     if (!planBedWake) return null;
@@ -166,6 +174,25 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
       setLoadingLog(false);
     }
   }, [token, todayStr]);
+
+  const refreshModalLog = useCallback(async () => {
+    if (!token) {
+      setModalLog(null);
+      return;
+    }
+    setLoadingModalLog(true);
+    try {
+      const res = await apiJson<{ log: DailySleepLogRow | null }>(
+        `/api/me/daily-sleep-log?date=${encodeURIComponent(modalDateStr)}`,
+        { token },
+      );
+      setModalLog(res.log ?? null);
+    } catch {
+      setModalLog(null);
+    } finally {
+      setLoadingModalLog(false);
+    }
+  }, [token, modalDateStr]);
 
   const refreshSleepGoal = useCallback(async () => {
     if (!token) {
@@ -199,7 +226,15 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
     setIsOpen(false);
   }, [dismissKey]);
 
-  const openModal = useCallback(() => setIsOpen(true), []);
+  const openModal = useCallback(
+    (dateYmd?: string) => {
+      const next = typeof dateYmd === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateYmd.trim()) ? dateYmd.trim() : todayStr;
+      setModalDateStr(next);
+      window.dispatchEvent(new CustomEvent('luna-sleep-checkin-opened', { detail: { date: next } }));
+      setIsOpen(true);
+    },
+    [todayStr],
+  );
 
   const handleDialogOpenChange = useCallback(
     (open: boolean) => {
@@ -207,29 +242,42 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
         setIsOpen(true);
         return;
       }
+      // Only apply "remind me later" behavior for today's check-in prompt.
+      if (modalDateStr !== todayStr) {
+        setIsOpen(false);
+        window.dispatchEvent(new CustomEvent('luna-sleep-checkin-closed', { detail: { date: modalDateStr } }));
+        return;
+      }
       if (todayLog) setIsOpen(false);
       else dismissForSession();
+      window.dispatchEvent(new CustomEvent('luna-sleep-checkin-closed', { detail: { date: modalDateStr } }));
     },
-    [todayLog, dismissForSession],
+    [todayLog, dismissForSession, modalDateStr, todayStr],
   );
 
-  const displayedGoal = todayLog != null ? Number(todayLog.sleep_goal_hours) : goalHours;
+  const displayedGoal = useMemo(() => {
+    if (modalLog != null) return Number(modalLog.sleep_goal_hours);
+    return modalDateStr === todayStr
+      ? goalHours
+      : estimateSleepGoalHoursForWakeDate(sleepSummary, zone, modalDateStr);
+  }, [modalLog, modalDateStr, todayStr, goalHours, sleepSummary, zone]);
 
   useEffect(() => {
     if (!isOpen) {
       wasModalOpen.current = false;
       return;
     }
+    void refreshModalLog();
     const justOpened = !wasModalOpen.current;
     wasModalOpen.current = true;
     setSaveError(null);
-    if (todayLog) {
-      setActualSleep(Number(todayLog.actual_sleep_hours));
-      setWakeCount(Math.max(0, Math.floor(Number(todayLog.wake_up_count))));
-      const m = String(todayLog.mood || '').toLowerCase() as DailySleepMood;
+    if (modalLog) {
+      setActualSleep(Number(modalLog.actual_sleep_hours));
+      setWakeCount(Math.max(0, Math.floor(Number(modalLog.wake_up_count))));
+      const m = String(modalLog.mood || '').toLowerCase() as DailySleepMood;
       setMood(MOOD_OPTIONS.some((o) => o.id === m) ? m : 'okay');
-      setFactors(Array.isArray(todayLog.factors) ? [...todayLog.factors] : []);
-      const lat = todayLog.latency_minutes;
+      setFactors(Array.isArray(modalLog.factors) ? [...modalLog.factors] : []);
+      const lat = modalLog.latency_minutes;
       if (lat == null) {
         setLatency(null);
       } else {
@@ -237,10 +285,13 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
         setLatency(LATENCY_OPTIONS.some((o) => o.value === n) ? n : null);
       }
 
-      const plan = getPreviousNightPlanBedWakeDateTimes(sleepSummary, zone);
+      const plan =
+        modalDateStr === todayStr
+          ? getPreviousNightPlanBedWakeDateTimes(sleepSummary, zone)
+          : getPlanBedWakeDateTimesForWakeDate(sleepSummary, zone, modalDateStr);
       if (plan) {
         const planH = hoursBetweenBedAndWake(plan.bed, plan.wake);
-        const actualH = Number(todayLog.actual_sleep_hours);
+        const actualH = Number(modalLog.actual_sleep_hours);
         const diffMin = Math.round((actualH - planH) * 60);
         let wakeS = Math.round(diffMin / OFFSET_STEP_MIN);
         wakeS = Math.max(-OFFSET_MAX_STEPS, Math.min(OFFSET_MAX_STEPS, wakeS));
@@ -254,7 +305,7 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
         setWakeOffsetSteps(0);
       }
     } else if (justOpened) {
-      setActualSleep(goalHours);
+      setActualSleep(displayedGoal);
       setBedOffsetSteps(0);
       setWakeOffsetSteps(0);
       setWakeCount(0);
@@ -262,7 +313,7 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
       setFactors([]);
       setLatency(null);
     }
-  }, [isOpen, todayLog, goalHours, sleepSummary, zone]);
+  }, [isOpen, modalLog, displayedGoal, sleepSummary, zone, modalDateStr, todayStr, refreshModalLog]);
 
   const save = useCallback(async () => {
     if (!token) return;
@@ -286,7 +337,7 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
         method: 'PUT',
         token,
         body: JSON.stringify({
-          date: todayStr,
+          date: modalDateStr,
           sleep_goal_hours: Number(displayedGoal),
           actual_sleep_hours: actualHoursToSave,
           wake_up_count: Math.floor(Number(wakeCount)),
@@ -301,7 +352,9 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
         toast.error(hint);
         return;
       }
-      setTodayLog(res.log);
+      setModalLog(res.log);
+      // Keep the "today" snapshot in sync if we edited today's log.
+      if (modalDateStr === todayStr) setTodayLog(res.log);
       setIsOpen(false);
       toast.success('Sleep log saved');
       window.dispatchEvent(new CustomEvent('luna-sleep-checkin-saved'));
@@ -320,7 +373,7 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
     }
   }, [
     token,
-    todayStr,
+    modalDateStr,
     displayedGoal,
     actualSleep,
     planBedWake,
@@ -330,6 +383,7 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
     factors,
     latency,
     refreshMe,
+    todayStr,
   ]);
 
   const toggleFactor = (f: string) => {
@@ -352,9 +406,11 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
     <SleepCheckInContext.Provider value={value}>
       {children}
       <Dialog open={isOpen} onOpenChange={handleDialogOpenChange}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md z-[60]">
           <DialogHeader>
-            <DialogTitle>Log last night</DialogTitle>
+            <DialogTitle>
+              Log sleep — {DateTime.fromFormat(modalDateStr, 'yyyy-MM-dd', { zone }).toFormat('MMM d')}
+            </DialogTitle>
             <DialogDescription>
               Quick check-in: confirm your plan or nudge bed and wake times. You can reopen anytime from the log icon.
             </DialogDescription>

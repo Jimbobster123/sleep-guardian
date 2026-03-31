@@ -2,6 +2,7 @@ import PageHeader from '@/components/PageHeader';
 import {
   Sun,
   Moon,
+  Sunset,
   ChevronLeft,
   ChevronRight,
   Wand2,
@@ -10,10 +11,12 @@ import {
   CheckSquare,
   Clock3,
   Trash2,
+  ClipboardList,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { format, addDays, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, eachDayOfInterval, isSameDay, isSameMonth, isToday } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSleepCheckIn } from '@/contexts/SleepCheckInContext';
 import { ApiError, apiJson } from '@/lib/api';
 import { isTaskPastDue } from '@/lib/taskOverdue';
 import PriorityIndicator from '@/components/PriorityIndicator';
@@ -22,6 +25,7 @@ import {
   defaultEndOneHourAfterStart,
   effectiveTimeZone,
   formatTimestampForApi,
+  formatWallTime12h,
   hourFloatInZone,
   hourRowOverlapsSuggestedWindDown,
   hourRowOverlapsWindDown,
@@ -36,6 +40,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import TaskEditModal from '@/components/TaskEditModal';
+
+// Wind-down icon: use Lucide's Sunset (includes arrow)
 
 const hours = Array.from({ length: 24 }, (_, i) => {
   // Start at 3 AM and wrap around to 2 AM
@@ -159,10 +165,12 @@ type CalendarView = 'day' | 'week' | 'month';
 
 const CalendarPage = () => {
   const { token, user } = useAuth();
+  const { openModal: openSleepLog } = useSleepCheckIn();
   const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const [day, setDay] = useState(() => new Date());
   const [viewMode, setViewMode] = useState<CalendarView>('day');
   const [events, setEvents] = useState<DbEvent[]>([]);
+  const [loggedDays, setLoggedDays] = useState<Set<string>>(() => new Set());
   const [sleep, setSleep] = useState<SleepGoalResponse | null>(null);
   const [suggestions, setSuggestions] = useState<ScheduleSuggestions | null>(null);
   const [loading, setLoading] = useState(true);
@@ -304,6 +312,60 @@ const CalendarPage = () => {
     return parseApiTimestamp(String(suggestions.sleep_window.start), zone);
   }, [suggestions?.sleep_window?.start, zone]);
 
+  /** Wind-down start as hour float (0–24) for icon marker row in day view. */
+  const windDownStartHourForDay = useMemo(() => {
+    if (windDownFlexMins <= 0) return null;
+    if (sleepTimes.source === 'suggested' && suggestedBedDateTime?.isValid) {
+      const w = suggestedBedDateTime.minus({ minutes: windDownFlexMins });
+      return w.isValid ? w.hour + w.minute / 60 + w.second / 3600 : null;
+    }
+    if (sleepTimes.source === 'saved') {
+      return (sleepTimes.bedHour - windDownFlexMins / 60 + 24) % 24;
+    }
+    return null;
+  }, [windDownFlexMins, sleepTimes.source, sleepTimes.bedHour, suggestedBedDateTime]);
+
+  const sleepMarkerLabels = useMemo(() => {
+    const wind = windDownFlexMins;
+    if (sleepTimes.source === 'suggested') {
+      const bedDt = suggestedBedDateTime;
+      const wakeDt = suggestions?.sleep_window?.end ? parseApiTimestamp(String(suggestions.sleep_window.end), zone) : null;
+      const bedLabel = bedDt?.isValid ? bedDt.toFormat('h:mm a') : null;
+      const wakeLabel = wakeDt?.isValid ? wakeDt.toFormat('h:mm a') : null;
+      const windLabel = bedDt?.isValid && wind > 0 ? bedDt.minus({ minutes: wind }).toFormat('h:mm a') : null;
+      return { bedLabel, wakeLabel, windLabel };
+    }
+
+    const bedRaw = String(windowForDay?.start_time || sleep?.goal?.target_bedtime || '23:00:00');
+    const wakeRaw = String(windowForDay?.end_time || sleep?.goal?.target_wake_time || '07:00:00');
+    const bedHm = bedRaw.slice(0, 5);
+    const wakeHm = wakeRaw.slice(0, 5);
+    const bedLabel = formatWallTime12h(bedHm) || timeTo12Hour(bedHm);
+    const wakeLabel = formatWallTime12h(wakeHm) || timeTo12Hour(wakeHm);
+
+    let windLabel: string | null = null;
+    if (wind > 0) {
+      const [bh, bm] = bedHm.split(':').map(Number);
+      const total = (bh || 0) * 60 + (bm || 0);
+      const wTotal = (total - wind + 1440) % 1440;
+      const wh = String(Math.floor(wTotal / 60)).padStart(2, '0');
+      const wm = String(wTotal % 60).padStart(2, '0');
+      windLabel = formatWallTime12h(`${wh}:${wm}`) || timeTo12Hour(`${wh}:${wm}`);
+    }
+
+    return { bedLabel, wakeLabel, windLabel };
+  }, [
+    sleepTimes.source,
+    suggestedBedDateTime,
+    suggestions?.sleep_window?.end,
+    zone,
+    windDownFlexMins,
+    windowForDay?.start_time,
+    windowForDay?.end_time,
+    sleep?.goal?.target_bedtime,
+    sleep?.goal?.target_wake_time,
+  ]);
+
   // For overnight sleep windows (bedtime > wake time), early-morning hours
   // on the current calendar day belong to the previous day's "bedtime episode".
   // Backend scheduling also treats those hours as belonging to the previous day.
@@ -325,11 +387,20 @@ const CalendarPage = () => {
     return (bh || 0) + (bm || 0) / 60;
   }, [prevWindowForDay, sleep?.goal?.target_bedtime]);
 
+  const wakeBoundaryHourForDay = useMemo(() => {
+    const isSavedMode = sleepTimes.source === 'saved';
+    const prevCrossesMidnight = isSavedMode ? bedHourPrev >= wakeHourPrev : false;
+    return isSavedMode && prevCrossesMidnight ? wakeHourPrev : sleepTimes.wakeHour;
+  }, [sleepTimes.source, sleepTimes.wakeHour, bedHourPrev, wakeHourPrev]);
+
   const dayVisibleRange = useMemo(() => {
     const wakeBoundaryHour = sleepTimes.source === 'saved' && bedHourPrev >= wakeHourPrev ? wakeHourPrev : sleepTimes.wakeHour;
     const startMin = minuteFrom3am(wakeBoundaryHour - 2);
     let endMin = minuteFrom3am(sleepTimes.bedHour + 2);
     if (endMin <= startMin) endMin += 1440;
+    // Bedtime + 2h can fall well before midnight; late deadlines (e.g. 11:59 PM) would be clipped out.
+    const lateNightCutoff = minuteFrom3am(26); // ~2:00 AM on the next calendar morning
+    endMin = Math.max(endMin, lateNightCutoff);
     const durationMin = Math.max(60, endMin - startMin);
     return { startMin, endMin, durationMin };
   }, [sleepTimes, bedHourPrev, wakeHourPrev]);
@@ -365,7 +436,9 @@ const CalendarPage = () => {
         if (!s || !en) return null;
         return { ...e, start: s, end: en };
       })
-      .filter((e): e is DayViewEvent => Boolean(e && e.start.getTime() < endMs && e.end.getTime() > startMs))
+      // Include events that start exactly at the next day's midnight.
+      // This prevents dragged deadline blocks from "disappearing" when snapping lands on 12:00 AM.
+      .filter((e): e is DayViewEvent => Boolean(e && e.start.getTime() <= endMs && e.end.getTime() > startMs))
       .sort((a, b) => a.start.getTime() - b.start.getTime());
   }, [events, dateStr, zone]);
   const dayAllDayEvents = useMemo(() => eventsForDay.filter((e) => Boolean(e.is_all_day)), [eventsForDay]);
@@ -448,6 +521,47 @@ const CalendarPage = () => {
     return { days, firstDay: firstDow };
   }, [viewMode, day]);
 
+  // Daily sleep logs for month/week view badges.
+  useEffect(() => {
+    if (
+      !token ||
+      (viewMode !== 'month' && viewMode !== 'week') ||
+      (viewMode === 'month' && monthGrid.days.length === 0) ||
+      (viewMode === 'week' && weekDays.length === 0)
+    ) {
+      setLoggedDays(new Set());
+      return;
+    }
+    let cancelled = false;
+    const from =
+      viewMode === 'month'
+        ? format(monthGrid.days[0], 'yyyy-MM-dd')
+        : format(startOfWeek(day, { weekStartsOn: 0 }), 'yyyy-MM-dd');
+    const to =
+      viewMode === 'month'
+        ? format(monthGrid.days[monthGrid.days.length - 1], 'yyyy-MM-dd')
+        : format(endOfWeek(day, { weekStartsOn: 0 }), 'yyyy-MM-dd');
+    void (async () => {
+      try {
+        const res = await apiJson<{ logs: Array<{ log_date: string }> }>(
+          `/api/me/daily-sleep-logs?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+          { token },
+        );
+        if (cancelled) return;
+        const s = new Set<string>();
+        (res.logs || []).forEach((l) => {
+          if (l?.log_date) s.add(String(l.log_date).slice(0, 10));
+        });
+        setLoggedDays(s);
+      } catch {
+        if (!cancelled) setLoggedDays(new Set());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, viewMode, day, monthGrid.days, weekDays.length]);
+
   const eventsForMonthDay = useMemo(() => {
     const byDay: Record<string, Array<{ event: DbEvent; start: Date; end: Date }>> = {};
     monthGrid.days.forEach((d) => {
@@ -490,6 +604,41 @@ const CalendarPage = () => {
     const mapped = minsFrom3am < dayVisibleRange.startMin ? minsFrom3am + 1440 : minsFrom3am;
     return ((mapped - dayVisibleRange.startMin) / dayVisibleRange.durationMin) * 100;
   }, [isViewingToday, now, zone, dayVisibleRange]);
+
+  /** Dashed "Due" line when a task is planned earlier the same day but the deadline is later (no separate task_due row needed). */
+  const taskDueDeadlineMarkers = useMemo(() => {
+    const day0 = parseApiTimestamp(`${dateStr} 00:00:00`, zone);
+    if (!day0) return [];
+    const day1 = day0.plus({ days: 1 });
+    const taskIdsWithDueRow = new Set(
+      eventsForDay.filter((e) => e.source === 'task_due' && e.task_id).map((e) => String(e.task_id)),
+    );
+    const seen = new Set<string>();
+    const out: { key: string; topPct: number; at: string; title: string }[] = [];
+    for (const e of eventsForDay) {
+      if (e.source !== 'task_planned' || !e.task_id || !e.task_due_datetime) continue;
+      if (taskIdsWithDueRow.has(String(e.task_id))) continue;
+      const dueDt = parseApiTimestamp(String(e.task_due_datetime), zone);
+      if (!dueDt?.isValid) continue;
+      if (dueDt < day0 || dueDt > day1) continue;
+      if (Math.abs(dueDt.toMillis() - e.start.getTime()) < 60_000) continue;
+      const tid = String(e.task_id);
+      if (seen.has(tid)) continue;
+      seen.add(tid);
+      const hourFloat = dueDt.hour + dueDt.minute / 60 + dueDt.second / 3600;
+      const minsFrom3am = minuteFrom3am(hourFloat);
+      if (!intervalContains(minsFrom3am, dayVisibleRange.startMin, dayVisibleRange.endMin)) continue;
+      const mapped = minsFrom3am < dayVisibleRange.startMin ? minsFrom3am + 1440 : minsFrom3am;
+      const topPct = ((mapped - dayVisibleRange.startMin) / dayVisibleRange.durationMin) * 100;
+      out.push({
+        key: `due-deadline-${tid}-${dateStr}`,
+        topPct,
+        at: dueDt.toFormat('h:mm a'),
+        title: (e.title || 'Task').trim() || 'Task',
+      });
+    }
+    return out;
+  }, [eventsForDay, dateStr, zone, dayVisibleRange]);
 
   const dayTimelineRef = useRef<HTMLDivElement | null>(null);
   const [draggingEventId, setDraggingEventId] = useState<string | null>(null);
@@ -702,123 +851,135 @@ const CalendarPage = () => {
     };
   }, [draggingEventId, snappedStartMillisFromClientY, persistEventTimeMove, openEventEditor]);
 
+  // If the sleep-log modal opens while the user is interacting with the calendar,
+  // ensure any drag state is cleared so pointer/drag handlers can't "steal" interactions.
+  useEffect(() => {
+    const onSleepCheckinOpened = () => {
+      dragSessionRef.current = null;
+      setDraggingEventId(null);
+      setDragPreviewStartMs(null);
+      setPostDropPlacement(null);
+    };
+    window.addEventListener('luna-sleep-checkin-opened', onSleepCheckinOpened);
+    return () => window.removeEventListener('luna-sleep-checkin-opened', onSleepCheckinOpened);
+  }, []);
+
   return (
     <div className="max-w-4xl mx-auto">
       <PageHeader title="Calendar" compact />
 
       <div className="px-5 pb-6">
-        {/* View switcher + Date picker */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
-          <div className="flex rounded-lg border-2 border-border bg-card shadow-sm overflow-hidden flex-shrink-0">
-            {(['day', 'week', 'month'] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setViewMode(v)}
-                className={`px-4 py-2.5 text-sm font-semibold capitalize transition-colors ${
-                  viewMode === v
-                    ? 'bg-accent text-accent-foreground'
-                    : 'bg-card text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-                }`}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
-          <div className="bg-card rounded-xl p-3 shadow-sm border border-border/50 flex-1 flex items-center justify-between">
-            <button
-              className="p-1"
-              onClick={() =>
-                setDay((d) =>
-                  viewMode === 'day' ? subDays(d, 1) : viewMode === 'week' ? subWeeks(d, 1) : subMonths(d, 1)
-                )
-              }
-              aria-label="Previous"
-            >
-              <ChevronLeft className="w-4 h-4 text-muted-foreground" />
-            </button>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 text-sm">
-                {viewMode === 'day' && (
-                  <>
-                    <span className="font-medium text-foreground">{format(day, 'MMM')}</span>
-                    <span className="text-muted-foreground">{format(day, 'd')}</span>
-                    <span className="text-muted-foreground">{format(day, 'yyyy')}</span>
-                    {isViewingToday ? <span className="text-xs font-semibold text-red-500">Today</span> : null}
-                  </>
-                )}
-                {viewMode === 'week' && (
-                  <span className="font-medium text-foreground">
-                    {format(startOfWeek(day, { weekStartsOn: 0 }), 'MMM d')} – {format(endOfWeek(day, { weekStartsOn: 0 }), 'MMM d')}
-                  </span>
-                )}
-                {viewMode === 'month' && (
-                  <span className="font-medium text-foreground">{format(day, 'MMMM yyyy')}</span>
-                )}
+        <div className="mb-4 space-y-6">
+          {/* View mode (top row, centered) */}
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 max-sm:gap-2">
+            <div />
+
+            <div className="flex justify-center">
+              <div className="flex h-9 rounded-lg border-2 border-border bg-card shadow-sm overflow-hidden flex-shrink-0">
+                {(['day', 'week', 'month'] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setViewMode(v)}
+                    className={`h-9 px-3 text-xs font-semibold capitalize transition-colors ${
+                      viewMode === v
+                        ? 'bg-accent text-accent-foreground'
+                        : 'bg-card text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                    } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0`}
+                  >
+                    {v}
+                  </button>
+                ))}
               </div>
             </div>
-            <button
-              className="p-1"
-              onClick={() =>
-                setDay((d) =>
-                  viewMode === 'day' ? addDays(d, 1) : viewMode === 'week' ? addWeeks(d, 1) : addMonths(d, 1)
-                )
-              }
-              aria-label="Next"
-            >
-              <ChevronRight className="w-4 h-4 text-muted-foreground" />
-            </button>
+
+            {/* Log icon (only for day view) */}
+            {viewMode === 'day' ? (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => openSleepLog(dateStr)}
+                  aria-label="Log sleep for selected day"
+                  className="h-9 w-9 p-0 flex items-center justify-center rounded-md hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+                >
+                  <ClipboardList className="h-4 w-4 text-muted-foreground" aria-hidden />
+                </button>
+              </div>
+            ) : (
+              <div />
+            )}
+          </div>
+
+          {/* Date + navigation (bottom row) */}
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-8 max-sm:grid-cols-1 max-sm:justify-items-center">
+            {/* Date (left) */}
+            <div className="flex items-end min-w-0">
+              {viewMode === 'day' ? (
+                <span className="font-display text-4xl font-semibold text-foreground leading-none tabular-nums tracking-wide">
+                  {format(day, 'MMMM')} {format(day, 'd')}
+                </span>
+              ) : viewMode === 'week' ? (
+                <span className="font-display text-4xl font-semibold text-foreground leading-none tabular-nums tracking-wide">
+                  {format(startOfWeek(day, { weekStartsOn: 0 }), 'MMM d')} – {format(endOfWeek(day, { weekStartsOn: 0 }), 'MMM d')}
+                </span>
+              ) : (
+                <span className="font-display text-4xl font-semibold text-foreground leading-none tabular-nums tracking-wide">
+                  {format(day, 'MMMM yyyy')}
+                </span>
+              )}
+            </div>
+
+            {/* Spacer (center col) */}
+            <div />
+
+            {/* Navigation (right) */}
+            <div className="flex items-center justify-end gap-3 max-sm:justify-center">
+              <div className="bg-card h-10 rounded-xl shadow-sm border border-border/50 flex items-center">
+                <button
+                  className="p-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+                  onClick={() =>
+                    setDay((d) =>
+                      viewMode === 'day' ? subDays(d, 1) : viewMode === 'week' ? subWeeks(d, 1) : subMonths(d, 1)
+                    )
+                  }
+                  aria-label="Previous"
+                >
+                  <ChevronLeft className="w-4 h-4 text-muted-foreground" />
+                </button>
+                <div className="h-full w-px bg-border/60" />
+
+                {/* Today (between arrows) */}
+                <button
+                  type="button"
+                  onClick={() => setDay(new Date())}
+                  className={`h-9 px-3 text-xs font-semibold transition-colors ${
+                    isToday(day)
+                      ? 'text-accent'
+                      : 'text-muted-foreground opacity-70 hover:text-foreground hover:bg-muted/30'
+                  } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0`}
+                  aria-label="Go to today"
+                >
+                  Today
+                </button>
+
+                <div className="h-full w-px bg-border/60" />
+                <button
+                  className="p-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+                  onClick={() =>
+                    setDay((d) =>
+                      viewMode === 'day' ? addDays(d, 1) : viewMode === 'week' ? addWeeks(d, 1) : addMonths(d, 1)
+                    )
+                  }
+                  aria-label="Next"
+                >
+                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Sleep window protected - at top (day view only) */}
-        {viewMode === 'day' && (
-        <div className="mb-4 bg-sleep-light border border-sleep/20 rounded-xl p-3">
-          <p className="text-xs text-foreground">
-            <Moon className="w-3.5 h-3.5 inline mr-1 text-sleep" />
-            <span className="font-medium">Sleep window protected:</span> {sleepTimes.label}. Scheduling here will trigger a gentle warning.
-          </p>
-          {windDownFlexMins > 0 ? (
-            <p className="text-xs text-muted-foreground mt-1.5">
-              <span className="font-medium text-foreground/90">Wind-down</span> — the{' '}
-              {windDownFlexMins}-minute block before your goal bedtime is a lighter pink-purple band on the timeline
-              (sleep is the deeper blue-lavender).
-            </p>
-          ) : null}
-        </div>
-        )}
-
-        {viewMode === 'day' && (
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-xs text-muted-foreground">
-            Sleep window: <span className="text-foreground/80">{sleepTimes.label}</span>
-            {sleepTimes.source === 'suggested' ? <span className="text-muted-foreground"> (suggested)</span> : null}
-          </p>
-          <button
-            onClick={async () => {
-              if (!token) return;
-              const res = await apiJson<ScheduleSuggestions>('/api/me/schedule/suggestions', {
-                method: 'POST',
-                token,
-                body: JSON.stringify({ date: dateStr }),
-              });
-              setSuggestions(res);
-
-              // Apply the suggested sleep window so the protected purple zones move.
-              await apiJson('/api/me/sleep-window/apply-suggestion', {
-                method: 'POST',
-                token,
-                body: JSON.stringify({ date: dateStr }),
-              });
-
-              await reloadSleepAndEvents();
-            }}
-            className="text-xs font-medium text-accent flex items-center gap-1"
-          >
-            <Wand2 className="w-3.5 h-3.5" /> Suggest shifts
-          </button>
-        </div>
-        )}
+        
 
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogContent>
@@ -1260,11 +1421,37 @@ const CalendarPage = () => {
 
         {/* Day view — timeline with 3am anchor; events positioned by wall time in profile zone */}
         <div className={viewMode === 'day' ? 'block' : 'hidden'}>
-          <p className="text-[11px] text-muted-foreground mb-2 px-1">
-            Times use your profile timezone ({zone}). Drag an event to reschedule; tap without dragging to edit.
-          </p>
+          <div className="flex items-center justify-between mb-4 mt-6 px-1">
+            <p className="text-[11px] text-muted-foreground">
+              Drag an event to reschedule; tap without dragging to edit.
+            </p>
+            <button
+              onClick={async () => {
+                if (!token) return;
+                const res = await apiJson<ScheduleSuggestions>('/api/me/schedule/suggestions', {
+                  method: 'POST',
+                  token,
+                  body: JSON.stringify({ date: dateStr }),
+                });
+                setSuggestions(res);
+
+                // Apply the suggested sleep window so the protected purple zones move.
+                await apiJson('/api/me/sleep-window/apply-suggestion', {
+                  method: 'POST',
+                  token,
+                  body: JSON.stringify({ date: dateStr }),
+                });
+
+                await reloadSleepAndEvents();
+              }}
+              className="text-xs font-medium text-accent flex items-center gap-1 min-w-fit"
+            >
+              <Wand2 className="w-3.5 h-3.5" /> Suggest shifts
+            </button>
+          </div>
+
           {dayAllDayEvents.length ? (
-            <div className="mb-2 rounded-xl border border-border/50 bg-card p-2">
+            <div className="mb-3 rounded-xl border border-border/50 bg-card p-2">
               <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">All Day</p>
               <div className="mt-1 flex flex-wrap gap-1.5">
                 {dayAllDayEvents.map((event) => (
@@ -1297,6 +1484,89 @@ const CalendarPage = () => {
                 className="flex-1 relative bg-background/30"
                 style={{ minHeight: `${visibleHours.length * 3}rem` }}
               >
+                {/* Precise wind-down overlay (minute-accurate) */}
+                {windDownStartHourForDay != null && windDownFlexMins > 0 ? (
+                  (() => {
+                    const startH = windDownStartHourForDay;
+                    const endH = sleepTimes.bedHour;
+                    const startMinRaw = minuteFrom3am(startH);
+                    const endMinRaw = minuteFrom3am(endH);
+                    const startMin =
+                      startMinRaw < dayVisibleRange.startMin ? startMinRaw + 1440 : startMinRaw;
+                    let endMin = endMinRaw < dayVisibleRange.startMin ? endMinRaw + 1440 : endMinRaw;
+                    if (endMin <= startMin) endMin += 1440;
+                    const clipStart = Math.max(startMin, dayVisibleRange.startMin);
+                    const clipEnd = Math.min(endMin, dayVisibleRange.endMin);
+                    if (clipEnd <= clipStart) return null;
+                    const top = ((clipStart - dayVisibleRange.startMin) / dayVisibleRange.durationMin) * 100;
+                    const hPct = ((clipEnd - clipStart) / dayVisibleRange.durationMin) * 100;
+                    return (
+                      <>
+                        <div
+                          className="absolute left-0 right-0 z-[4] pointer-events-none wind-down-bg"
+                          style={{ top: `${top}%`, height: `${hPct}%` }}
+                        />
+                        {/* Wind-down boundary line (top of block) */}
+                        <div
+                          className="absolute left-0 right-0 z-[6] pointer-events-none"
+                          style={{ top: `${top}%` }}
+                        >
+                          <div className="absolute left-0 right-0 h-px bg-accent/50" />
+                        </div>
+
+                        {/* Wind-down icon centered within overlay */}
+                        <div
+                          className="absolute left-0 right-0 z-[6] pointer-events-none"
+                          style={{ top: `${top + hPct / 2}%` }}
+                        >
+                          <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                            <Sunset className="w-4 h-4 text-accent" />
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()
+                ) : null}
+
+                {/* Precise wake overlay (30 minutes after wake) */}
+                {wakeBoundaryHourForDay != null ? (
+                  (() => {
+                    const startH = wakeBoundaryHourForDay;
+                    const endH = startH + 0.5; // 30 minutes
+                    const startMinRaw = minuteFrom3am(startH);
+                    const endMinRaw = minuteFrom3am(endH);
+                    const startMin =
+                      startMinRaw < dayVisibleRange.startMin ? startMinRaw + 1440 : startMinRaw;
+                    let endMin = endMinRaw < dayVisibleRange.startMin ? endMinRaw + 1440 : endMinRaw;
+                    if (endMin <= startMin) endMin += 1440;
+                    const clipStart = Math.max(startMin, dayVisibleRange.startMin);
+                    const clipEnd = Math.min(endMin, dayVisibleRange.endMin);
+                    if (clipEnd <= clipStart) return null;
+                    const top = ((clipStart - dayVisibleRange.startMin) / dayVisibleRange.durationMin) * 100;
+                    const hPct = ((clipEnd - clipStart) / dayVisibleRange.durationMin) * 100;
+                    return (
+                      <>
+                        <div
+                          className="absolute left-0 right-0 z-[3] pointer-events-none wake-window-bg"
+                          style={{ top: `${top}%`, height: `${hPct}%` }}
+                        />
+                        {/* Wake boundary line (top of block) */}
+                        <div className="absolute left-0 right-0 z-[6] pointer-events-none" style={{ top: `${top}%` }}>
+                          <div className="absolute left-0 right-0 h-px bg-warning/60" />
+                        </div>
+                        {/* Wake icon centered within overlay */}
+                        <div
+                          className="absolute left-0 right-0 z-[6] pointer-events-none"
+                          style={{ top: `${top + hPct / 2}%` }}
+                        >
+                          <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                            <Sun className="w-4 h-4 text-warning" />
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()
+                ) : null}
                 {visibleHours.map(({ hour }) => {
                   const currentCrossesMidnight = sleepTimes.bedHour >= sleepTimes.wakeHour;
 
@@ -1315,7 +1585,6 @@ const CalendarPage = () => {
                       : hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(sleepTimes.wakeHour);
 
                   const wakeBoundaryHour = isSavedMode && prevCrossesMidnight ? wakeHourPrev : sleepTimes.wakeHour;
-                  const inWakeWindow = hour >= Math.floor(wakeBoundaryHour) && hour < Math.floor(wakeBoundaryHour) + 1;
                   const isWakeRow = hour === Math.floor(wakeBoundaryHour);
                   const isBedRow = hour === Math.floor(sleepTimes.bedHour);
                   const morningSleepTail = isSavedMode && inPrevEpisode;
@@ -1341,21 +1610,13 @@ const CalendarPage = () => {
                     }
                   }
 
-                  const timelineBg =
-                    inSleepWindow ? 'sleep-window-bg' : inWindDown ? 'wind-down-bg' : inWakeWindow ? 'wake-window-bg' : '';
+                  const timelineBg = inSleepWindow ? 'sleep-window-bg' : '';
                   return (
                     <div
                       key={hour}
                       className={`relative min-h-[3rem] border-b border-border/30 ${timelineBg}`}
                     >
-                      {isWakeRow && (
-                        <>
-                          <div className="absolute top-0 left-0 right-0 h-px bg-warning/60 z-[5]" />
-                          <div className="absolute left-2 top-1/2 -translate-y-1/2 z-[5] pointer-events-none">
-                            <Sun className="w-4 h-4 text-warning" />
-                          </div>
-                        </>
-                      )}
+                      {/* Wake marker is rendered as a minute-accurate overlay above. */}
                       {isBedRow && (
                         <>
                           <div className="absolute top-0 left-0 right-0 h-px bg-sleep/60 z-[5]" />
@@ -1379,6 +1640,25 @@ const CalendarPage = () => {
                     </span>
                   </div>
                 )}
+                {taskDueDeadlineMarkers.map((m) => (
+                  <div
+                    key={m.key}
+                    className="absolute left-0 right-0 z-[22] pointer-events-none flex items-center gap-2"
+                    style={{ top: `${m.topPct}%` }}
+                  >
+                    <div
+                      className="flex-1 min-w-0 shrink h-px bg-[repeating-linear-gradient(90deg,rgb(0_0_0/0.88)_0px,rgb(0_0_0/0.88)_4px,transparent_4px,transparent_7px)]"
+                      aria-hidden
+                    />
+                    <span
+                      className="text-[10px] pr-1 max-w-[min(16rem,70%)] text-right"
+                      title={`${m.title} — due ${m.at}`}
+                    >
+                      <span className="font-semibold text-foreground block truncate">{m.title}</span>
+                      <span className="font-semibold text-destructive whitespace-nowrap">Due {m.at}</span>
+                    </span>
+                  </div>
+                ))}
                 <div className="absolute inset-0 z-30 px-1 pointer-events-none">
                   {dayTimedEvents.map((event) => {
                     let sTime = event.start.getTime();
@@ -1407,6 +1687,12 @@ const CalendarPage = () => {
                     const draggable = !event.is_all_day;
                     const startLabel = DateTime.fromJSDate(s).setZone(zone).toFormat('h:mm a');
                     const endLabel = DateTime.fromJSDate(en).setZone(zone).toFormat('h:mm a');
+                    const eventKind =
+                      event.source === 'task_planned'
+                        ? 'planned'
+                        : event.source === 'task_due'
+                          ? 'due'
+                          : 'event';
                     return (
                       <div
                         key={event.event_id}
@@ -1414,26 +1700,24 @@ const CalendarPage = () => {
                           draggable
                             ? 'cursor-grab active:cursor-grabbing touch-none'
                             : 'cursor-pointer'
-                        }`}
+                        } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0`}
                         style={{
                           top: `${top}%`,
                           height: `${hPct}%`,
-                          minHeight: '1.75rem',
+                          // Due markers are short blocks (15m) but need room for 2 text lines (label + time).
+                          minHeight: event.source === 'task_due' ? '3rem' : '1.75rem',
                         }}
                         onPointerDown={draggable ? (e) => onDragPointerDown(e, event) : undefined}
                         onClick={!draggable ? () => void openEventEditor(event) : undefined}
-                        role={!draggable ? 'button' : undefined}
-                        tabIndex={!draggable ? 0 : undefined}
-                        onKeyDown={
-                          !draggable
-                            ? (e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
-                                  void openEventEditor(event);
-                                }
-                              }
-                            : undefined
-                        }
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`${event.title || 'Event'} (${eventKind})`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            void openEventEditor(event);
+                          }
+                        }}
                       >
                         <div className={`h-full text-left px-2 py-1.5 text-xs font-medium min-w-0 ${getEventStyle(event.source)}`}>
                           <div className="flex items-center gap-1.5 min-w-0">
@@ -1462,7 +1746,13 @@ const CalendarPage = () => {
                             <span className="truncate font-medium">{event.title || 'Event'}</span>
                           </div>
                           <div className="text-[10px] opacity-85 mt-0.5">
-                            {startLabel} – {endLabel}
+                            {event.source === 'task_due' ? (
+                              <>{startLabel}</>
+                            ) : (
+                              <>
+                                {startLabel} – {endLabel}
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1474,22 +1764,79 @@ const CalendarPage = () => {
           </div>
         </div>
 
+        {/* Sleep markers (day view only) - shown beneath the day calendar block */}
+        {viewMode === 'day' ? (
+          <div className="mt-8 mb-10 flex items-center justify-center">
+            <div className="flex flex-wrap items-center justify-center gap-6 min-w-0">
+              {sleepMarkerLabels.windLabel ? (
+                <div className="wind-down-bg flex items-center gap-2.5 rounded-lg border border-accent/30 px-3 py-2 text-sm text-foreground">
+                  <Sunset className="h-4 w-4 text-accent" aria-hidden />
+                  <span className="font-semibold text-accent">Wind-down</span>
+                  <span className="font-medium tabular-nums">{sleepMarkerLabels.windLabel}</span>
+                </div>
+              ) : null}
+              {sleepMarkerLabels.bedLabel ? (
+                <div className="sleep-window-bg flex items-center gap-2.5 rounded-lg border border-[hsl(var(--sleep)/0.35)] px-3 py-2 text-sm text-foreground">
+                  <Moon className="h-4 w-4 text-[hsl(var(--sleep))]" aria-hidden />
+                  <span className="font-semibold text-[hsl(var(--sleep))]">Bedtime</span>
+                  <span className="font-medium tabular-nums">{sleepMarkerLabels.bedLabel}</span>
+                </div>
+              ) : null}
+              {sleepMarkerLabels.wakeLabel ? (
+                <div className="flex items-center gap-2.5 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-foreground">
+                  <Sun className="h-4 w-4 text-warning" aria-hidden />
+                  <span className="font-semibold text-warning">Wake</span>
+                  <span className="font-medium tabular-nums">{sleepMarkerLabels.wakeLabel}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         {/* Week view */}
         <div className={viewMode === 'week' ? 'block' : 'hidden'}>
         <div className="bg-card rounded-xl shadow-sm border border-border/50 overflow-x-auto">
           <div className="grid min-w-[600px] border-b border-border" style={{ gridTemplateColumns: '4.5rem repeat(7, minmax(0, 1fr))' }}>
             <div className="py-2 border-r border-border" />
-            {weekDays.map((d) => (
-              <div
-                key={d.toISOString()}
-                className={`py-2 text-center text-[11px] border-r border-border last:border-r-0 ${
-                  isToday(d) ? 'font-semibold text-accent bg-sleep/20' : 'bg-muted/70 text-muted-foreground'
-                }`}
-              >
-                <div>{format(d, 'EEE')}</div>
-                <div className="font-medium text-foreground">{format(d, 'd')}</div>
-              </div>
-            ))}
+            {weekDays.map((d) => {
+              const key = format(d, 'yyyy-MM-dd');
+              const hasLog = loggedDays.has(key);
+              return (
+                <div
+                  key={d.toISOString()}
+                  className={`py-2 text-center text-[11px] border-r border-border last:border-r-0 ${
+                    isToday(d) ? 'font-semibold text-accent bg-sleep/20' : 'bg-muted/70 text-muted-foreground'
+                  }`}
+                >
+                  <div>{format(d, 'EEE')}</div>
+                  <div className="relative flex items-center justify-center font-medium text-foreground">
+                    {/* Keep the day number centered regardless of icon presence */}
+                    <span className="tabular-nums w-6 text-center">
+                      {format(d, 'd')}
+                    </span>
+                    {hasLog ? (
+                      <button
+                        type="button"
+                        aria-label={`Open sleep log for ${format(d, 'MMM d')}`}
+                        title="Edit sleep log"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void openSleepLog(key);
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded-md hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+                      >
+                        <ClipboardList
+                          className={`h-3 w-3 ${
+                            isToday(d) ? 'text-accent' : 'text-muted-foreground/90'
+                          }`}
+                          aria-hidden
+                        />
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <div className="grid min-w-[600px] border-b border-border/60 bg-muted/20" style={{ gridTemplateColumns: '4.5rem repeat(7, minmax(0, 1fr))' }}>
             <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground border-r border-border">
@@ -1617,28 +1964,46 @@ const CalendarPage = () => {
                     !isSameMonth(d, day) ? 'bg-muted/30' : ''
                   } ${isToday(d) ? 'bg-accent/5' : ''}`}
                 >
-                  <div
-                    className={`text-[11px] mb-1 ${
-                      isToday(d) ? 'font-bold text-accent' : isSameMonth(d, day) ? 'text-foreground' : 'text-muted-foreground'
-                    }`}
-                  >
-                    {format(d, 'd')}
+                  <div className="mb-1 flex items-center gap-1">
+                    <div
+                      className={`text-[11px] ${
+                        isToday(d) ? 'font-bold text-accent' : isSameMonth(d, day) ? 'text-foreground' : 'text-muted-foreground'
+                      }`}
+                    >
+                      {format(d, 'd')}
+                    </div>
+                    {loggedDays.has(key) ? (
+                      <ClipboardList
+                        className={`h-3 w-3 ${
+                          isToday(d) ? 'text-accent' : isSameMonth(d, day) ? 'text-muted-foreground' : 'text-muted-foreground/70'
+                        }`}
+                        aria-label="Daily sleep log completed"
+                      />
+                    ) : null}
                   </div>
                   <div className="space-y-0.5">
                     {dayEvents.map(({ event, start, end }) => (
-                      <button
+                      <div
                         key={event.event_id}
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         onClick={(e) => {
                           e.stopPropagation();
                           void openEventEditor({ ...event, start, end });
                         }}
-                        className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate flex items-center gap-0.5 ${getEventStyle(event.source)}`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void openEventEditor({ ...event, start, end });
+                          }
+                        }}
+                        className={`w-full text-left rounded px-1 py-0.5 text-[10px] truncate flex items-center gap-0.5 ${getEventStyle(event.source)} cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0`}
                       >
                         {calendarTaskPastDue(event) && <LatePill compact />}
                         {taskPriorityIndicator(event, true)}
                         <span className="truncate">{event.title || 'Event'}</span>
-                      </button>
+                      </div>
                     ))}
                     {more > 0 && (
                       <div className="text-[10px] text-muted-foreground px-1">+{more} more</div>
