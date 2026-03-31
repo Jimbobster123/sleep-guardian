@@ -364,6 +364,8 @@ const CalendarPage = () => {
       .filter((e): e is DayViewEvent => Boolean(e && e.start.getTime() < endMs && e.end.getTime() > startMs))
       .sort((a, b) => a.start.getTime() - b.start.getTime());
   }, [events, dateStr, zone]);
+  const dayAllDayEvents = useMemo(() => eventsForDay.filter((e) => Boolean(e.is_all_day)), [eventsForDay]);
+  const dayTimedEvents = useMemo(() => eventsForDay.filter((e) => !e.is_all_day), [eventsForDay]);
 
   const weekDays = useMemo(() => {
     if (viewMode !== 'week') return [];
@@ -413,6 +415,16 @@ const CalendarPage = () => {
     Object.keys(byDay).forEach((k) => byDay[k].sort((a, b) => a.start.getTime() - b.start.getTime()));
     return byDay;
   }, [events, weekDays, zone]);
+  const weekAllDayByDay = useMemo(() => {
+    const byDay: Record<string, Array<{ event: DbEvent; start: Date; end: Date }>> = {};
+    weekDays.forEach((d) => {
+      const key = format(d, 'yyyy-MM-dd');
+      byDay[key] = (eventsForWeekDay[key] || [])
+        .filter((x) => Boolean(x.event.is_all_day))
+        .sort((a, b) => a.start.getTime() - b.start.getTime());
+    });
+    return byDay;
+  }, [eventsForWeekDay, weekDays]);
 
   const monthGrid = useMemo(() => {
     if (viewMode !== 'month') return { days: [] as Date[], firstDay: 0 };
@@ -922,7 +934,7 @@ const CalendarPage = () => {
                     ) : createAllDay && createEventDate ? (
                       <p className="text-xs text-foreground rounded-md bg-background/80 border border-border/40 px-2 py-1.5">
                         <span className="font-medium">Preview:</span> All day on{' '}
-                        {parseApiTimestamp(`${createEventDate} 12:00:00`, zone)?.toFormat('EEE MMM d, yyyy') ??
+                        {parseApiTimestamp(`${createEventDate} 00:00:00`, zone)?.toFormat('EEE MMM d, yyyy') ??
                           createEventDate}
                       </p>
                     ) : null}
@@ -1002,10 +1014,11 @@ const CalendarPage = () => {
                           token,
                           body: JSON.stringify(payload),
                         });
-                        if ('events' in created && Array.isArray(created.events)) {
-                          setEvents((prev) => [...prev, ...created.events]);
+                        const maybeEvents = (created as { events?: DbEvent[] }).events;
+                        if (Array.isArray(maybeEvents)) {
+                          setEvents((prev) => [...prev, ...maybeEvents]);
                         } else {
-                          setEvents((prev) => [...prev, created]);
+                          setEvents((prev) => [...prev, created as DbEvent]);
                         }
                         setCreateOpen(false);
                         setCreateTitle('');
@@ -1216,6 +1229,23 @@ const CalendarPage = () => {
           <p className="text-[11px] text-muted-foreground mb-2 px-1">
             Times use your profile timezone ({zone}). Drag an event to reschedule; tap without dragging to edit.
           </p>
+          {dayAllDayEvents.length ? (
+            <div className="mb-2 rounded-xl border border-border/50 bg-card p-2">
+              <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">All Day</p>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {dayAllDayEvents.map((event) => (
+                  <button
+                    key={event.event_id}
+                    type="button"
+                    onClick={() => void openEventEditor(event)}
+                    className={`rounded-md border px-2 py-1 text-[11px] font-medium ${getEventStyle(event.source)}`}
+                  >
+                    {event.title || 'Event'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="bg-card rounded-xl shadow-sm border border-border/50 overflow-hidden">
             <div className="flex">
               <div className="w-[7.5rem] flex-shrink-0 border-r border-border/30 flex flex-col bg-card">
@@ -1316,7 +1346,7 @@ const CalendarPage = () => {
                   </div>
                 )}
                 <div className="absolute inset-0 z-30 px-1 pointer-events-none">
-                  {eventsForDay.map((event) => {
+                  {dayTimedEvents.map((event) => {
                     let sTime = event.start.getTime();
                     let eTime = event.end.getTime();
                     if (postDropPlacement?.eventId === event.event_id) {
@@ -1427,6 +1457,34 @@ const CalendarPage = () => {
               </div>
             ))}
           </div>
+          <div className="grid min-w-[600px] border-b border-border/60 bg-muted/20" style={{ gridTemplateColumns: '4.5rem repeat(7, minmax(0, 1fr))' }}>
+            <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground border-r border-border">
+              All Day
+            </div>
+            {weekDays.map((d) => {
+              const dayKey = format(d, 'yyyy-MM-dd');
+              const allDay = weekAllDayByDay[dayKey] || [];
+              return (
+                <div key={`allday-${dayKey}`} className="min-h-[2rem] border-r border-border last:border-r-0 p-1">
+                  <div className="flex flex-wrap gap-1">
+                    {allDay.slice(0, 3).map(({ event, start, end }) => (
+                      <button
+                        key={event.event_id}
+                        type="button"
+                        onClick={() => void openEventEditor({ ...event, start, end })}
+                        className={`rounded px-1.5 py-0.5 text-[10px] ${getEventStyle(event.source)}`}
+                      >
+                        {event.title || 'Event'}
+                      </button>
+                    ))}
+                    {allDay.length > 3 ? (
+                      <span className="text-[10px] text-muted-foreground px-1">+{allDay.length - 3}</span>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
           <div className="relative">
             {visibleHours.map(({ hour, label }) => (
               <div key={hour} className="grid min-w-[600px] border-b border-border min-h-[2.5rem]" style={{ gridTemplateColumns: '4.5rem repeat(7, minmax(0, 1fr))' }}>
@@ -1455,6 +1513,7 @@ const CalendarPage = () => {
                   const hourStart = hour;
                   const hourEnd = hour + 1;
                   const dayEvents = (eventsForWeekDay[dayKey] || []).filter((x) => {
+                    if (x.event.is_all_day) return false;
                     const startH = hourFloatInZone(x.start, zone);
                     const endH = hourFloatInZone(x.end, zone);
                     return startH < hourEnd && endH > hourStart;
@@ -1476,7 +1535,7 @@ const CalendarPage = () => {
                       key={dayKey}
                       className={`p-0.5 border-r border-border last:border-r-0 min-h-[2.5rem] ${bgStyles}`}
                     >
-                      {dayEvents.map(({ event }) => (
+                      {dayEvents.map(({ event, start, end }) => (
                         <button
                           key={event.event_id}
                           type="button"
@@ -1532,7 +1591,7 @@ const CalendarPage = () => {
                     {format(d, 'd')}
                   </div>
                   <div className="space-y-0.5">
-                    {dayEvents.map(({ event }) => (
+                    {dayEvents.map(({ event, start, end }) => (
                       <button
                         key={event.event_id}
                         type="button"

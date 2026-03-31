@@ -1,11 +1,41 @@
 import dotenv from 'dotenv';
 import { google } from 'googleapis';
-import { updateUserGoogleIntegration, upsertImportedCalendarEvent, updateCalendarEvent } from '../queries.js';
+import {
+  clearUserGoogleIntegration,
+  updateUserGoogleIntegration,
+  upsertImportedCalendarEvent,
+  updateCalendarEvent,
+} from '../queries.js';
 
 dotenv.config();
 
 // Use full calendar scope so we can read + create/update/delete events.
 const CALENDAR_SCOPES = ['https://www.googleapis.com/auth/calendar'];
+
+export function isGoogleSyncEnabled() {
+  const raw = String(process.env.GOOGLE_SYNC_ENABLED || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function isInvalidGrantError(err) {
+  const code = err?.response?.data?.error;
+  const desc = err?.response?.data?.error_description;
+  const msg = err?.message;
+  return code === 'invalid_grant' || String(desc || '').toLowerCase().includes('revoked') || String(msg || '').includes('invalid_grant');
+}
+
+async function handleGoogleSyncError(user, err, operation) {
+  if (isInvalidGrantError(err) && user?.user_id) {
+    try {
+      await clearUserGoogleIntegration(user.user_id);
+      console.warn(`[google-sync] Disabled Google integration for user ${user.user_id} after invalid_grant during ${operation}.`);
+    } catch (clearErr) {
+      console.error('[google-sync] Failed to clear revoked Google token:', clearErr);
+    }
+    return;
+  }
+  console.warn(`[google-sync] ${operation} failed:`, err?.message || err);
+}
 
 function getOAuthClient() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -58,6 +88,7 @@ function getAuthedCalendarClient(user) {
 }
 
 export async function syncGoogleToLocal({ user, timeMin, timeMax }) {
+  if (!isGoogleSyncEnabled()) return { imported: 0, skipped: true, reason: 'disabled' };
   const { calendar, calendarId } = getAuthedCalendarClient(user);
 
   const res = await calendar.events.list({
@@ -92,53 +123,59 @@ export async function syncGoogleToLocal({ user, timeMin, timeMax }) {
 }
 
 export async function pushLocalEventToGoogle({ user, event }) {
+  if (!isGoogleSyncEnabled()) return;
   if (!user.google_refresh_token) return;
-  const { calendar, calendarId } = getAuthedCalendarClient(user);
+  try {
+    const { calendar, calendarId } = getAuthedCalendarClient(user);
 
-  const body = {
-    summary: event.title || 'Event',
-    description: event.description || undefined,
-    start: {
-      dateTime: event.start_datetime,
-      timeZone: user.timezone || 'UTC',
-    },
-    end: {
-      dateTime: event.end_datetime,
-      timeZone: user.timezone || 'UTC',
-    },
-  };
+    const body = {
+      summary: event.title || 'Event',
+      description: event.description || undefined,
+      start: {
+        dateTime: event.start_datetime,
+        timeZone: user.timezone || 'UTC',
+      },
+      end: {
+        dateTime: event.end_datetime,
+        timeZone: user.timezone || 'UTC',
+      },
+    };
 
-  let googleEventId = event.google_event_id || null;
-  if (googleEventId) {
-    await calendar.events.update({
-      calendarId,
-      eventId: googleEventId,
-      requestBody: body,
-    });
-  } else {
-    const created = await calendar.events.insert({
-      calendarId,
-      requestBody: body,
-    });
-    googleEventId = created.data.id || null;
-  }
+    let googleEventId = event.google_event_id || null;
+    if (googleEventId) {
+      await calendar.events.update({
+        calendarId,
+        eventId: googleEventId,
+        requestBody: body,
+      });
+    } else {
+      const created = await calendar.events.insert({
+        calendarId,
+        requestBody: body,
+      });
+      googleEventId = created.data.id || null;
+    }
 
-  if (googleEventId && event.event_id) {
-    await updateCalendarEvent(user.user_id, event.event_id, { google_event_id: googleEventId, source: 'google' });
+    if (googleEventId && event.event_id) {
+      await updateCalendarEvent(user.user_id, event.event_id, { google_event_id: googleEventId, source: 'google' });
+    }
+  } catch (err) {
+    await handleGoogleSyncError(user, err, 'pushLocalEventToGoogle');
   }
 }
 
 export async function deleteGoogleEventForLocal({ user, event }) {
+  if (!isGoogleSyncEnabled()) return;
   if (!user.google_refresh_token) return;
   if (!event.google_event_id) return;
-  const { calendar, calendarId } = getAuthedCalendarClient(user);
   try {
+    const { calendar, calendarId } = getAuthedCalendarClient(user);
     await calendar.events.delete({
       calendarId,
       eventId: event.google_event_id,
     });
   } catch (err) {
-    // swallow 404s etc.
+    await handleGoogleSyncError(user, err, 'deleteGoogleEventForLocal');
   }
 }
 

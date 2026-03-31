@@ -116,7 +116,7 @@ function effectiveTodaySortMs(t: Task): number {
 }
 
 const Home = () => {
-  const { token, user } = useAuth();
+  const { token, user, refreshMe } = useAuth();
   const streakDays = streakDaysForUser(user);
   const streakSubtext =
     user?.streak_type === 'GOAL_MET' ? 'Goal Completion Streak' : 'Daily Log Streak';
@@ -159,10 +159,13 @@ const Home = () => {
   }, [fetchSleepCheckinSummary]);
 
   useEffect(() => {
-    const onSaved = () => void fetchSleepCheckinSummary();
+    const onSaved = () => {
+      void fetchSleepCheckinSummary();
+      void refreshMe();
+    };
     window.addEventListener('luna-sleep-checkin-saved', onSaved);
     return () => window.removeEventListener('luna-sleep-checkin-saved', onSaved);
-  }, [fetchSleepCheckinSummary]);
+  }, [fetchSleepCheckinSummary, refreshMe]);
 
   const homeQualityPct =
     sleepCheckinSummary?.last_night?.quality_pct ??
