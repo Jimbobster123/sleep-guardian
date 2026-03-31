@@ -50,7 +50,7 @@ export default function OnboardingSleepGoal() {
       }
       await apiJson("/api/me/sleep-goal", { method: "PUT", token, body: JSON.stringify(draft) });
       toast.success("Sleep goal saved.", { duration: 3000 });
-      nav("/", { replace: true });
+      nav("/home", { replace: true });
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Failed to save sleep goal.";
       setError(message);

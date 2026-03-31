@@ -43,7 +43,7 @@ export default function Signup() {
           body: JSON.stringify({ imageDataUrl: photoDataUrl }),
         });
       }
-      nav("/onboarding/sleep-goal", { replace: true });
+      nav("/home", { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Signup failed");
     } finally {

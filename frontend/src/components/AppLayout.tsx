@@ -36,17 +36,13 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
           />
           <div className="mx-auto w-full max-w-md md:max-w-5xl pl-2 pr-4 md:pl-3 md:pr-6 py-3">
             <div className="flex items-center justify-between gap-4">
-              <button
-                type="button"
-                onClick={() => navigate('/')}
-                className="flex min-h-[44px] min-w-[44px] items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                aria-label="Go to Home"
-              >
+              {/* Plain brand text (non-interactive). Luna title should not navigate/logout. */}
+              <div className="flex min-h-[44px] min-w-[44px] items-center gap-2 rounded-lg px-2 text-left">
                 <Moon className="h-5 w-5 shrink-0 text-sleep" aria-hidden />
                 <div className="font-display text-2xl font-semibold leading-none text-foreground">
                   Luna
                 </div>
-              </button>
+              </div>
 
               <nav className="flex flex-wrap items-center justify-end gap-1" aria-label="Main">
                 {tabs.map(({ path, icon: Icon, label }) => {

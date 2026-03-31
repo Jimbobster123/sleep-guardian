@@ -19,7 +19,8 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const from = ((loc.state as LoginLocationState | null)?.from) || "/home";
+  // Per product UX: always land on the Home page after login.
+  const from = "/home";
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

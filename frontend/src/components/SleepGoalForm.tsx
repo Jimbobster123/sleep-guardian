@@ -41,6 +41,13 @@ function formatHm(h: number, m: number) {
   return `${hh}:${mm}:00`;
 }
 
+function formatHm12(hm: string): string {
+  const { h, m } = parseHm(hm);
+  const hour = ((h % 12) + 12) % 12 || 12;
+  const ampm = h >= 12 ? "PM" : "AM";
+  return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
 function subtractMinutesFromTime(endTime: string, minutes: number) {
   const { h, m } = parseHm(endTime);
   const total = h * 60 + m - minutes;
@@ -102,12 +109,19 @@ export default function SleepGoalForm({
     const mins = initial?.target_sleep_minutes;
     return typeof mins === "number" && mins > 0 ? String(Math.round((mins / 60) * 10) / 10) : "8";
   });
-  const [bedFlex, setBedFlex] = useState(() => String(initial?.bedtime_flex_minutes ?? 30));
   const [times, setTimes] = useState<Record<number, { bed: string; wake: string }>>(initialByDow);
   const [singleWindow, setSingleWindow] = useState<{ bed: string; wake: string }>(() => ({
     bed: initialByDow[0]?.bed || "23:00",
     wake: initialByDow[0]?.wake || "07:00",
   }));
+
+  const referenceBedHm = useMemo(() => {
+    if (goalType === "fixed_bedtime" && targetBedtime) return String(targetBedtime).slice(0, 5);
+    if (windowMode === "same") return String(singleWindow.bed || "23:00").slice(0, 5);
+    return String(times[0]?.bed || "23:00").slice(0, 5);
+  }, [goalType, targetBedtime, windowMode, singleWindow.bed, times]);
+
+  const [windDownMins, setWindDownMins] = useState(() => String(initial?.bedtime_flex_minutes ?? 30));
 
   // Sync state when initial data loads (e.g. from Profile after API fetch)
   useEffect(() => {
@@ -115,7 +129,7 @@ export default function SleepGoalForm({
     setGoalType((initial.goal_type as GoalType) || "fixed_bedtime");
     const mins = initial.target_sleep_minutes;
     setSleepHours(typeof mins === "number" && mins > 0 ? String(Math.round((mins / 60) * 10) / 10) : "8");
-    setBedFlex(String(initial.bedtime_flex_minutes ?? 30));
+    setWindDownMins(String(initial.bedtime_flex_minutes ?? 30));
     const wins = initial.windows || [];
     if (wins.length >= 7) {
       const allSame = wins.every(
@@ -144,25 +158,25 @@ export default function SleepGoalForm({
       setTimes(by);
     }
   }, [initial?.goal_type, initial?.target_sleep_minutes, initial?.bedtime_flex_minutes, initial?.windows]);
-  const [flexError, setFlexError] = useState<string | null>(null);
+  const [windDownError, setWindDownError] = useState<string | null>(null);
   const [hoursError, setHoursError] = useState<string | null>(null);
 
   const setTime = (dow: number, key: "bed" | "wake", value: string) => {
     setTimes((t) => ({ ...t, [dow]: { ...t[dow], [key]: value } }));
   };
 
-  const handleFlexChange = (value: string) => {
+  const handleWindDownMinutesChange = (value: string) => {
     if (value === "") {
-      setBedFlex(value);
-      setFlexError("Flex time must be a whole number.");
+      setWindDownMins(value);
+      setWindDownError("Wind-down minutes must be a whole number.");
       return;
     }
     if (!/^\d+$/.test(value)) {
-      setFlexError("Flex time must be a whole number.");
+      setWindDownError("Wind-down minutes must be a whole number.");
       return;
     }
-    setBedFlex(value);
-    setFlexError(null);
+    setWindDownMins(value);
+    setWindDownError(null);
   };
 
   const handleSleepHoursChange = (value: string) => {
@@ -185,7 +199,10 @@ export default function SleepGoalForm({
   };
 
   const hasValidationErrors =
-    !!flexError || (goalType === "fixed_duration" && !!hoursError) || bedFlex.trim() === "" || (goalType === "fixed_duration" && sleepHours.trim() === "");
+    !!windDownError ||
+    windDownMins.trim() === "" ||
+    (goalType === "fixed_duration" && !!hoursError) ||
+    (goalType === "fixed_duration" && sleepHours.trim() === "");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -221,12 +238,14 @@ export default function SleepGoalForm({
       });
     }
 
+    const bedtime_flex_minutes = Math.max(0, Math.round(Number(windDownMins || 0)));
+
     await onSubmit({
       goal_type: goalType,
       target_sleep_minutes,
       target_bedtime: goalType === "fixed_bedtime" ? (targetBedtime ? normalizeTime(targetBedtime) : null) : null,
       target_wake_time: goalType === "fixed_wake_time" ? (targetWakeTime ? normalizeTime(targetWakeTime) : null) : null,
-      bedtime_flex_minutes: Math.max(0, Math.round(Number(bedFlex || 0))),
+      bedtime_flex_minutes,
       windows,
     });
   };
@@ -268,23 +287,37 @@ export default function SleepGoalForm({
         </div>
       )}
 
-      {/* Flex window */}
+      {/* Wind-down */}
       <div className="space-y-1">
-        <Label htmlFor="flex">Flex (minutes)</Label>
+        <Label htmlFor="windDown">Wind-down (minutes before bedtime)</Label>
         <Input
-          id="flex"
+          id="windDown"
           type="number"
           inputMode="numeric"
           step={5}
           min={0}
           max={240}
-          value={bedFlex}
-          onChange={(e) => setBedFlex(e.target.value)}
+          value={windDownMins}
+          onChange={(e) => handleWindDownMinutesChange(e.target.value)}
           onWheel={blurNumberInputOnWheel}
         />
-        <p className="text-xs text-muted-foreground">
-          How much wiggle room you want around your ideal bedtime.
-        </p>
+        {windDownError ? <p className="text-xs text-destructive">{windDownError}</p> : null}
+        {windDownError == null && referenceBedHm && windDownMins.trim() !== "" ? (
+          <p className="text-xs text-muted-foreground">
+            Starts at{" "}
+            <span className="font-medium text-foreground">
+              {formatHm12(
+                String(
+                  subtractMinutesFromTime(
+                    referenceBedHm,
+                    Math.max(0, Math.round(Number(windDownMins || 0))),
+                  ),
+                ).slice(0, 5),
+              )}
+            </span>
+            .
+          </p>
+        ) : null}
       </div>
 
       {/* Window mode – only when using a sleep window goal */}

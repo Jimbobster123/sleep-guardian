@@ -1,8 +1,18 @@
-import { ChevronDown, ChevronRight, X } from 'lucide-react';
+import { CalendarDays, CheckSquare, ChevronDown, ChevronRight } from 'lucide-react';
 import { ApiError, apiJson } from '@/lib/api';
 import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
 import { effectiveTimeZone, parseApiTimestamp } from '@/lib/calendarTime';
 import { blurNumberInputOnWheel } from '@/lib/utils';
@@ -27,19 +37,8 @@ interface Task {
 
 const TASK_CATEGORIES = ['Work', 'Personal', 'Health', 'Errands', 'Study', 'Other'] as const;
 
-function localDateString(date = new Date()) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-function parseDateLike(value: string) {
-  if (!value) return null;
-  const normalized = value.includes(' ') ? value.replace(' ', 'T') : value;
-  const d = new Date(normalized);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
+const SELECT_FIELD =
+  'h-9 w-full rounded-md border border-input bg-background px-2 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2';
 
 interface TaskEditModalProps {
   task: Task;
@@ -67,9 +66,11 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
   const { user, token } = useAuth();
   const zone = effectiveTimeZone(user?.timezone);
   const [formData, setFormData] = useState<Task>(task);
-  const [showAdditional, setShowAdditional] = useState<boolean>(() =>
-    Boolean(task.planned_datetime || (task.estimated_minutes && task.estimated_minutes > 0))
+  /** User chose to schedule work on the calendar, or task already has a planned time / duration. */
+  const [scheduleSectionActive, setScheduleSectionActive] = useState<boolean>(() =>
+    Boolean(task.planned_datetime || (task.estimated_minutes && task.estimated_minutes > 0)),
   );
+  const [moreOptionsOpen, setMoreOptionsOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,11 +134,11 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
         title: trimmedTitle,
         notes: formData.notes?.trim() || undefined,
         due_datetime: formData.due_datetime || undefined,
-        planned_datetime: showAdditional ? formData.planned_datetime : undefined,
-        estimated_minutes: showAdditional ? (formData.estimated_minutes || 0) : 0,
+        planned_datetime: scheduleSectionActive ? formData.planned_datetime : undefined,
+        estimated_minutes: scheduleSectionActive ? (formData.estimated_minutes || 0) : 0,
         category: formData.category || undefined,
       };
-      if (!showAdditional) {
+      if (!scheduleSectionActive) {
         payload.planned_datetime = undefined;
       }
       await onSave(payload);
@@ -217,79 +218,82 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
     handleChange('planned_datetime', dt.isValid ? dt.toFormat('yyyy-MM-dd HH:mm:ss') : undefined);
   };
 
-  return createPortal(
-    <div className="fixed inset-0 bg-black/50 z-[100] flex items-end">
-      <div className="w-full max-h-[90vh] bg-background rounded-t-2xl shadow-xl animate-in slide-in-from-bottom flex flex-col">
-        {/* Header */}
-        <div className="flex-shrink-0 flex items-center justify-between p-4 pb-2 border-b border-border/50">
-          <h2 className="text-lg font-semibold text-foreground">
-            {mode === 'create' ? 'Add Task' : 'Edit Task'}
-          </h2>
-          <button
-            onClick={onClose}
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent className="max-h-[min(92vh,760px)] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <CheckSquare className="w-4 h-4" />
+            {mode === 'create' ? 'Add task' : 'Edit task'}
+          </DialogTitle>
+          <DialogDescription>
+            All times are saved in your profile timezone:{' '}
+            <span className="font-medium text-foreground">{zone}</span>.
+          </DialogDescription>
+        </DialogHeader>
 
-        {/* Form */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-4 pb-4">
-          <div className="space-y-4 mb-6">
-            {/* Title — required */}
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1 block">
-                Title <span className="text-destructive">*</span>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <label htmlFor="task-title" className="text-xs font-medium text-foreground">
+              Title
+            </label>
+            <Input
+              id="task-title"
+              value={formData.title}
+              onChange={(e) => handleChange('title', e.target.value)}
+              placeholder="e.g. Finish homework"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label htmlFor="task-priority" className="text-xs font-medium text-foreground">
+                Priority
               </label>
-              <input
-                type="text"
-                value={formData.title}
-                onChange={(e) => handleChange('title', e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                placeholder="Task title"
-              />
+              <select
+                id="task-priority"
+                value={Math.min(3, Math.max(1, 4 - (Number(formData.priority) || 3)))}
+                onChange={(e) => handleChange('priority', 4 - Number.parseInt(e.target.value, 10))}
+                className={SELECT_FIELD}
+              >
+                <option value={1}>1 — Low</option>
+                <option value={2}>2 — Medium</option>
+                <option value={3}>3 — High</option>
+              </select>
             </div>
-
-            {/* Priority & Category — same row */}
-            <div className="flex gap-3">
-              <div className="flex-1 min-w-0">
-                <label className="text-sm font-medium text-foreground mb-1 block">
-                  Priority <span className="text-destructive">*</span>
-                </label>
-                <select
-                  value={Math.min(3, Math.max(1, 4 - (Number(formData.priority) || 3)))}
-                  onChange={(e) => handleChange('priority', 4 - Number.parseInt(e.target.value, 10))}
-                  className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                >
-                  <option value={1}>1 — Low</option>
-                  <option value={2}>2 — Medium</option>
-                  <option value={3}>3 — High</option>
-                </select>
-              </div>
-              <div className="flex-1 min-w-0">
-                <label className="text-sm font-medium text-foreground mb-1 block">
-                  Category <span className="text-muted-foreground text-xs">(optional)</span>
-                </label>
-                <select
-                  value={formData.category || ''}
-                  onChange={(e) => handleChange('category', e.target.value || undefined)}
-                  className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                >
-                  <option value="">No category</option>
-                  {TASK_CATEGORIES.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Due date & time — same row */}
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1 block">
-                Due date & time <span className="text-muted-foreground text-xs">(optional)</span>
+            <div className="space-y-1">
+              <label htmlFor="task-category" className="text-xs font-medium text-foreground">
+                Category (optional)
               </label>
-              <div className="flex gap-3">
-                <input
+              <select
+                id="task-category"
+                value={formData.category || ''}
+                onChange={(e) => handleChange('category', e.target.value || undefined)}
+                className={SELECT_FIELD}
+              >
+                <option value="">No category</option>
+                {TASK_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded-lg border border-border/50 bg-muted/30 p-3">
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="min-w-[140px] flex-1 space-y-1">
+                <label htmlFor="task-due-date" className="text-xs font-medium text-foreground">
+                  Due date
+                </label>
+                <Input
+                  id="task-due-date"
                   type="date"
                   value={toDateValue(formData.due_datetime)}
                   onChange={(e) => {
@@ -297,9 +301,15 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                     if (!v) handleChange('due_datetime', undefined);
                     else setDueFromDateAndTime(v, toTimeValue(formData.due_datetime));
                   }}
-                  className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                  className="h-10 max-w-[220px]"
                 />
-                <input
+              </div>
+              <div className="min-w-[120px] flex-1 space-y-1">
+                <label htmlFor="task-due-time" className="text-xs font-medium text-foreground">
+                  Due time
+                </label>
+                <Input
+                  id="task-due-time"
                   type="time"
                   step={900}
                   value={toTimeValue(formData.due_datetime)}
@@ -308,95 +318,113 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                     if (!v) handleChange('due_datetime', undefined);
                     else setDueFromDateAndTime(toDateValue(formData.due_datetime), v);
                   }}
-                  className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                  className="h-10"
                 />
-                {formData.due_datetime ? (
-                  <button
-                    type="button"
-                    onClick={() => handleChange('due_datetime', undefined)}
-                    className="px-3 py-2 rounded-lg border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-sm font-medium"
-                  >
-                    Clear
-                  </button>
+              </div>
+              {formData.due_datetime ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => handleChange('due_datetime', undefined)}
+                >
+                  Clear
+                </Button>
+              ) : null}
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Optional — set a deadline or leave blank. Deadlines show on your calendar at the due time.
+            </p>
+            {!planSuggestLoading && planSuggestion?.due_in_sleep_or_wind_down ? (
+              <p className="text-xs text-muted-foreground">Due falls during sleep or wind-down.</p>
+            ) : null}
+            {formData.due_datetime &&
+            (planSuggestLoading ||
+              planSuggestion?.hint ||
+              (planSuggestion?.suggested_planned_datetime && planSuggestion?.suggested_block_end)) ? (
+              <div className="space-y-2 rounded-md border border-border/40 bg-background/80 px-2 py-1.5">
+                {planSuggestLoading ? (
+                  <p className="text-xs text-muted-foreground">Finding a time to work before this deadline…</p>
+                ) : planSuggestion?.suggested_planned_datetime && planSuggestion.suggested_block_end ? (
+                  <>
+                    <p className="text-xs text-foreground">
+                      <span className="font-medium">Suggested work block</span> before your due time (avoids sleep &
+                      wind-down):
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatPlanRange(
+                        planSuggestion.suggested_planned_datetime,
+                        planSuggestion.suggested_block_end,
+                        zone,
+                      )}
+                    </p>
+                    {usingDefaultDurationForSuggestion ? (
+                      <p className="text-[10px] text-muted-foreground">
+                        Assuming {minutesForSuggestion} minutes — adjust duration after you open{' '}
+                        <span className="font-medium text-foreground">Schedule on calendar</span>.
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="text-xs font-medium text-accent hover:underline"
+                      onClick={() => {
+                        setScheduleSectionActive(true);
+                        handleChange('planned_datetime', planSuggestion.suggested_planned_datetime!);
+                      }}
+                    >
+                      Use this planned time
+                    </button>
+                  </>
+                ) : planSuggestion?.hint ? (
+                  <p className="text-xs text-muted-foreground">{planSuggestion.hint}</p>
                 ) : null}
               </div>
-              {!planSuggestLoading && planSuggestion?.due_in_sleep_or_wind_down ? (
-                <p className="text-xs text-muted-foreground mt-1">Due falls during sleep or wind-down.</p>
-              ) : null}
-              {formData.due_datetime &&
-              (planSuggestLoading ||
-                planSuggestion?.hint ||
-                (planSuggestion?.suggested_planned_datetime && planSuggestion?.suggested_block_end)) ? (
-                <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 mt-2 space-y-2">
-                  {planSuggestLoading ? (
-                    <p className="text-xs text-muted-foreground">Finding a time to work before this deadline…</p>
-                  ) : planSuggestion?.suggested_planned_datetime && planSuggestion.suggested_block_end ? (
-                    <>
-                      <p className="text-xs text-foreground">
-                        <span className="font-medium">Suggested work block</span> before your due time (avoids sleep & wind-down):
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatPlanRange(
-                          planSuggestion.suggested_planned_datetime,
-                          planSuggestion.suggested_block_end,
-                          zone,
-                        )}
-                      </p>
-                      {usingDefaultDurationForSuggestion ? (
-                        <p className="text-[11px] text-muted-foreground">
-                          Assuming {minutesForSuggestion} minutes — adjust under Additional options if needed.
-                        </p>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="text-xs font-medium text-accent hover:underline"
-                        onClick={() => {
-                          setShowAdditional(true);
-                          handleChange('planned_datetime', planSuggestion.suggested_planned_datetime!);
-                        }}
-                      >
-                        Use this planned time
-                      </button>
-                    </>
-                  ) : planSuggestion?.hint ? (
-                    <p className="text-xs text-muted-foreground">{planSuggestion.hint}</p>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
+            ) : null}
+          </div>
 
-            {/* Notes — optional */}
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1 block">
-                Notes <span className="text-muted-foreground text-xs">(optional)</span>
-              </label>
-              <textarea
-                value={formData.notes || ''}
-                onChange={(e) => handleChange('notes', e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent resize-none"
-                rows={2}
-                placeholder="Add notes..."
-              />
+          {!scheduleSectionActive ? (
+            <div className="space-y-2 rounded-lg border border-border/50 bg-muted/30 p-3">
+              <p className="text-xs text-muted-foreground">
+                Want to block time to work on this before it is due? Add a <span className="font-medium text-foreground">planned</span>{' '}
+                work slot—it shows as a separate block on your calendar from the deadline above.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full gap-2 sm:w-auto"
+                onClick={() => setScheduleSectionActive(true)}
+              >
+                <CalendarDays className="h-4 w-4" />
+                Schedule on calendar
+              </Button>
             </div>
-
-            {/* Additional fields — collapsible */}
-            <Collapsible open={showAdditional} onOpenChange={setShowAdditional}>
-              <CollapsibleTrigger className="flex items-center gap-2 w-full py-2 text-sm font-medium text-foreground hover:text-accent transition-colors">
-                {showAdditional ? (
-                  <ChevronDown className="w-4 h-4" />
-                ) : (
-                  <ChevronRight className="w-4 h-4" />
-                )}
-                Additional options
-              </CollapsibleTrigger>
-              <CollapsibleContent className="space-y-4 pt-2">
-                {/* Planned date & time — same row */}
-                <div>
-                  <label className="text-sm font-medium text-foreground mb-1 block">
-                    Planned time to complete
-                  </label>
-                  <div className="flex gap-3">
-                    <input
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-xs font-medium text-foreground">Pick a time to work</p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto shrink-0 px-2 py-1 text-[10px] text-muted-foreground"
+                  onClick={() => {
+                    setScheduleSectionActive(false);
+                    handleChange('planned_datetime', undefined);
+                    handleChange('estimated_minutes', 0);
+                  }}
+                >
+                  Remove from calendar
+                </Button>
+              </div>
+              <div className="space-y-3 rounded-lg border border-border/50 bg-muted/30 p-3">
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="min-w-[140px] flex-1 space-y-1">
+                    <label htmlFor="task-planned-date" className="text-xs font-medium text-foreground">
+                      Work date
+                    </label>
+                    <Input
+                      id="task-planned-date"
                       type="date"
                       value={toDateValue(formData.planned_datetime)}
                       onChange={(e) => {
@@ -404,9 +432,15 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                         if (!v) handleChange('planned_datetime', undefined);
                         else setPlannedFromDateAndTime(v, toTimeValue(formData.planned_datetime));
                       }}
-                      className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                      className="h-10 max-w-[220px]"
                     />
-                    <input
+                  </div>
+                  <div className="min-w-[120px] flex-1 space-y-1">
+                    <label htmlFor="task-planned-time" className="text-xs font-medium text-foreground">
+                      Start time
+                    </label>
+                    <Input
+                      id="task-planned-time"
                       type="time"
                       step={900}
                       value={toTimeValue(formData.planned_datetime)}
@@ -415,183 +449,217 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                         if (!v) handleChange('planned_datetime', undefined);
                         else setPlannedFromDateAndTime(toDateValue(formData.planned_datetime), v);
                       }}
-                      className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                      className="h-10"
                     />
-                    {formData.planned_datetime ? (
-                      <button
-                        type="button"
-                        onClick={() => handleChange('planned_datetime', undefined)}
-                        className="px-3 py-2 rounded-lg border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-sm font-medium"
-                      >
-                        Clear
-                      </button>
-                    ) : null}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    When you plan to work on this. Adds to your calendar. Cannot overlap sleep or wind-down (your sleep goal). Times use your profile timezone
-                    {zone ? ` (${zone})` : ''}.
-                  </p>
-                </div>
-
-                {/* Estimated duration */}
-                <div>
-                  <label className="text-sm font-medium text-foreground mb-1 block">
-                    Estimated duration
-                  </label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-medium text-muted-foreground">Hours</label>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min="0"
-                        max="24"
-                        value={Math.floor((formData.estimated_minutes || 0) / 60) || ''}
-                        onChange={(e) => {
-                          const nextH = Math.max(0, parseInt(e.target.value, 10) || 0);
-                          const currentM = Math.max(0, (formData.estimated_minutes || 0) % 60);
-                          handleChange('estimated_minutes', nextH * 60 + currentM);
-                        }}
-                        onWheel={blurNumberInputOnWheel}
-                        className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                        placeholder="e.g. 1"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-medium text-muted-foreground">Minutes</label>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min="0"
-                        max="59"
-                        step="5"
-                        value={(formData.estimated_minutes || 0) % 60 || ''}
-                        onChange={(e) => {
-                          const nextMRaw = parseInt(e.target.value, 10) || 0;
-                          const nextM = Math.min(59, Math.max(0, nextMRaw));
-                          const currentH = Math.max(0, Math.floor((formData.estimated_minutes || 0) / 60));
-                          handleChange('estimated_minutes', currentH * 60 + nextM);
-                        }}
-                        onWheel={blurNumberInputOnWheel}
-                        className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                        placeholder="e.g. 30"
-                      />
-                    </div>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">Used for the suggested work block.</p>
-                </div>
-
-                {mode === 'create' && (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="text-sm font-medium text-foreground mb-1 block">Repeat</label>
-                      <select
-                        value={formData.repeat || 'none'}
-                        onChange={(e) => handleChange('repeat', e.target.value as Task['repeat'])}
-                        className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                      >
-                        <option value="none">Does not repeat</option>
-                        <option value="daily">Daily</option>
-                        <option value="weekdays">Weekdays</option>
-                        <option value="weekly">Weekly</option>
-                      </select>
-                    </div>
-                    {(formData.repeat || 'none') !== 'none' && (
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-sm font-medium text-foreground mb-1 block">Occurrences</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="365"
-                            value={formData.repeat_count || 5}
-                            onChange={(e) => handleChange('repeat_count', parseInt(e.target.value, 10) || 1)}
-                            onWheel={blurNumberInputOnWheel}
-                            className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-sm font-medium text-foreground mb-1 block">Repeat until</label>
-                          <input
-                            type="date"
-                            value={formData.repeat_until || ''}
-                            onChange={(e) => handleChange('repeat_until', e.target.value || undefined)}
-                            className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Status — edit mode only */}
-                {mode === 'edit' && (
-                  <div>
-                    <label className="text-sm font-medium text-foreground mb-1 block">Status</label>
-                    <select
-                      value={formData.status}
-                      onChange={(e) => handleChange('status', e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
+                  {formData.planned_datetime ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => handleChange('planned_datetime', undefined)}
                     >
-                      <option value="pending">Pending</option>
-                      <option value="in_progress">In Progress</option>
-                      <option value="completed">Completed</option>
-                    </select>
-                  </div>
-                )}
-
-                {mode === 'edit' && formData.recurrence_series_id ? (
-                  <div>
-                    <label className="text-sm font-medium text-foreground mb-1 block">Apply changes to</label>
-                    <select
-                      value={formData.edit_scope || 'single'}
-                      onChange={(e) => handleChange('edit_scope', e.target.value as Task['edit_scope'])}
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-                    >
-                      <option value="single">Only this task</option>
-                      <option value="series">All tasks in this series</option>
-                    </select>
-                  </div>
-                ) : null}
-              </CollapsibleContent>
-            </Collapsible>
-
-            {error && (
-              <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3">
-                <p className="text-sm text-destructive">{error}</p>
+                      Clear
+                    </Button>
+                  ) : null}
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Shown as a &quot;Planned&quot; task block. Cannot overlap sleep or wind-down (your sleep goal).
+                </p>
               </div>
-            )}
+
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-foreground">How long you plan to work</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label htmlFor="task-est-hours" className="text-[10px] text-muted-foreground">
+                      Hours
+                    </label>
+                    <Input
+                      id="task-est-hours"
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={24}
+                      value={Math.floor((formData.estimated_minutes || 0) / 60) || ''}
+                      onChange={(e) => {
+                        const nextH = Math.max(0, parseInt(e.target.value, 10) || 0);
+                        const currentM = Math.max(0, (formData.estimated_minutes || 0) % 60);
+                        handleChange('estimated_minutes', nextH * 60 + currentM);
+                      }}
+                      onWheel={blurNumberInputOnWheel}
+                      className="h-9"
+                      placeholder="e.g. 1"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label htmlFor="task-est-min" className="text-[10px] text-muted-foreground">
+                      Minutes
+                    </label>
+                    <Input
+                      id="task-est-min"
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={59}
+                      step={5}
+                      value={(formData.estimated_minutes || 0) % 60 || ''}
+                      onChange={(e) => {
+                        const nextMRaw = parseInt(e.target.value, 10) || 0;
+                        const nextM = Math.min(59, Math.max(0, nextMRaw));
+                        const currentH = Math.max(0, Math.floor((formData.estimated_minutes || 0) / 60));
+                        handleChange('estimated_minutes', currentH * 60 + nextM);
+                      }}
+                      onWheel={blurNumberInputOnWheel}
+                      className="h-9"
+                      placeholder="e.g. 30"
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-muted-foreground">Sets the length of the planned block and improves deadline suggestions.</p>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1">
+            <label htmlFor="task-notes" className="text-xs font-medium text-foreground">
+              Notes (optional)
+            </label>
+            <Textarea
+              id="task-notes"
+              value={formData.notes || ''}
+              onChange={(e) => handleChange('notes', e.target.value)}
+              className="min-h-[90px]"
+              placeholder="Notes…"
+            />
           </div>
+
+          <Collapsible open={moreOptionsOpen} onOpenChange={setMoreOptionsOpen}>
+            <CollapsibleTrigger className="flex w-full items-center gap-2 py-2 text-xs font-medium text-foreground hover:text-accent transition-colors">
+              {moreOptionsOpen ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+              More options
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-3 pt-2">
+              {mode === 'create' ? (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div className="space-y-1 sm:col-span-1">
+                    <label htmlFor="task-repeat" className="text-[10px] text-muted-foreground">
+                      Repeat
+                    </label>
+                    <select
+                      id="task-repeat"
+                      value={formData.repeat || 'none'}
+                      onChange={(e) => handleChange('repeat', e.target.value as Task['repeat'])}
+                      className={SELECT_FIELD}
+                    >
+                      <option value="none">Does not repeat</option>
+                      <option value="daily">Daily</option>
+                      <option value="weekdays">Weekdays</option>
+                      <option value="weekly">Weekly</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label htmlFor="task-repeat-count" className="text-[10px] text-muted-foreground">
+                      Occurrences
+                    </label>
+                    <Input
+                      id="task-repeat-count"
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={formData.repeat_count || 5}
+                      onChange={(e) => handleChange('repeat_count', parseInt(e.target.value, 10) || 1)}
+                      onWheel={blurNumberInputOnWheel}
+                      disabled={(formData.repeat || 'none') === 'none' || Boolean(formData.repeat_until)}
+                      className="h-9"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label htmlFor="task-repeat-until" className="text-[10px] text-muted-foreground">
+                      Repeat until
+                    </label>
+                    <Input
+                      id="task-repeat-until"
+                      type="date"
+                      value={formData.repeat_until || ''}
+                      onChange={(e) => handleChange('repeat_until', e.target.value || undefined)}
+                      disabled={(formData.repeat || 'none') === 'none'}
+                      className="h-9"
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {mode === 'edit' ? (
+                <div className="space-y-1">
+                  <label htmlFor="task-status" className="text-xs font-medium text-foreground">
+                    Status
+                  </label>
+                  <select
+                    id="task-status"
+                    value={formData.status}
+                    onChange={(e) => handleChange('status', e.target.value)}
+                    className={SELECT_FIELD}
+                  >
+                    <option value="pending">Pending</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="completed">Completed</option>
+                  </select>
+                </div>
+              ) : null}
+
+              {mode === 'edit' && formData.recurrence_series_id ? (
+                <div className="space-y-1">
+                  <label htmlFor="task-edit-scope" className="text-xs font-medium text-foreground">
+                    Apply changes to
+                  </label>
+                  <select
+                    id="task-edit-scope"
+                    value={formData.edit_scope || 'single'}
+                    onChange={(e) => handleChange('edit_scope', e.target.value as Task['edit_scope'])}
+                    className={SELECT_FIELD}
+                  >
+                    <option value="single">Only this task</option>
+                    <option value="series">All tasks in this series</option>
+                  </select>
+                </div>
+              ) : null}
+            </CollapsibleContent>
+          </Collapsible>
+
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
         </div>
 
-        {/* Actions */}
-        <div className="flex-shrink-0 flex gap-3 p-4 pt-2 border-t border-border/50">
+        <DialogFooter className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
           {mode === 'edit' && onDelete ? (
-            <button
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full border-destructive/50 text-destructive hover:bg-destructive/10 sm:mr-auto sm:w-auto"
               onClick={handleDelete}
               disabled={deleting || saving}
-              className="px-4 py-2 rounded-lg border border-destructive/40 text-destructive hover:bg-destructive/10 transition-colors font-medium disabled:opacity-50"
             >
-              {deleting ? 'DELETING…' : 'DELETE'}
-            </button>
-          ) : null}
-          <button
-            onClick={onClose}
-            className="flex-1 px-4 py-2 rounded-lg border border-border text-foreground hover:bg-muted transition-colors font-medium"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving || deleting}
-            className="flex-1 px-4 py-2 rounded-lg bg-accent text-white hover:opacity-90 transition-opacity font-semibold tracking-wide uppercase disabled:opacity-50"
-          >
-            {saving ? (mode === 'create' ? 'ADDING…' : 'SAVING…') : mode === 'create' ? 'ADD TASK' : 'SAVE'}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body
+              {deleting ? 'Deleting…' : 'Delete'}
+            </Button>
+          ) : (
+            <span className="hidden sm:block sm:flex-1" aria-hidden />
+          )}
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:gap-2">
+            <Button type="button" variant="outline" onClick={onClose} disabled={saving || deleting} className="sm:min-w-[5rem]">
+              Cancel
+            </Button>
+            <Button type="button" onClick={handleSave} disabled={saving || deleting} className="sm:min-w-[5rem]">
+              {saving ? (mode === 'create' ? 'Adding…' : 'Saving…') : mode === 'create' ? 'Add' : 'Save'}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
