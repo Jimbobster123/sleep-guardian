@@ -36,6 +36,7 @@ interface Task {
 }
 
 const TASK_CATEGORIES = ['Work', 'Personal', 'Health', 'Errands', 'Study', 'Other'] as const;
+const DATE_ONLY_DUE_SENTINEL = '23:59:59';
 
 const SELECT_FIELD =
   'h-9 w-full rounded-md border border-input bg-background px-2 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2';
@@ -54,6 +55,12 @@ type PlanSuggestionResponse = {
   hint: string | null;
   due_in_sleep_or_wind_down: boolean;
 };
+
+function isDateOnlyDueDatetime(value?: string) {
+  if (!value) return false;
+  const normalized = String(value).trim().replace('T', ' ');
+  return normalized.endsWith(DATE_ONLY_DUE_SENTINEL);
+}
 
 function formatPlanRange(startStr: string, endStr: string, zone: string) {
   const s = parseApiTimestamp(startStr, zone);
@@ -81,15 +88,16 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
-  const minutesForSuggestion = formData.due_datetime
+  const dueHasExplicitTime = Boolean(formData.due_datetime && !isDateOnlyDueDatetime(formData.due_datetime));
+  const minutesForSuggestion = dueHasExplicitTime
     ? Math.max(15, formData.estimated_minutes > 0 ? formData.estimated_minutes : 60)
     : 0;
   const usingDefaultDurationForSuggestion = Boolean(
-    formData.due_datetime && (!formData.estimated_minutes || formData.estimated_minutes < 15),
+    dueHasExplicitTime && (!formData.estimated_minutes || formData.estimated_minutes < 15),
   );
 
   useEffect(() => {
-    if (!token || !formData.due_datetime || minutesForSuggestion < 15) {
+    if (!token || !formData.due_datetime || !dueHasExplicitTime || minutesForSuggestion < 15) {
       setPlanSuggestion(null);
       setPlanSuggestLoading(false);
       return;
@@ -117,7 +125,7 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
       window.clearTimeout(t);
       setPlanSuggestLoading(false);
     };
-  }, [token, formData.due_datetime, minutesForSuggestion]);
+  }, [token, formData.due_datetime, dueHasExplicitTime, minutesForSuggestion]);
 
   const handleSave = async () => {
     const trimmedTitle = (formData.title || '').trim();
@@ -182,22 +190,27 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
     const dt = parseApiTimestamp(value, zone);
     return dt ? dt.toFormat('yyyy-MM-dd') : '';
   };
-  const toTimeValue = (value?: string) => {
+  const toTimeValue = (value?: string, blankForDateOnly = false) => {
+    if (blankForDateOnly && isDateOnlyDueDatetime(value)) return '';
     const dt = parseApiTimestamp(value, zone);
     return dt ? dt.toFormat('HH:mm') : '';
   };
   const setDueFromDateAndTime = (date: string, time: string) => {
-    // Allow users to set date first then time (and vice versa).
-    // Only explicit clears (empty string from an input) or the Clear button should clear the field.
     if (!date && !time) {
       handleChange('due_datetime', undefined);
       return;
     }
     const existingDate = toDateValue(formData.due_datetime);
-    const existingTime = toTimeValue(formData.due_datetime);
     const d = date || existingDate || DateTime.now().setZone(zone).toFormat('yyyy-MM-dd');
-    const t = time || existingTime || '00:00';
-    const [hh, mm] = t.split(':').map((x) => parseInt(x, 10));
+    if (!d) {
+      handleChange('due_datetime', undefined);
+      return;
+    }
+    if (!time) {
+      handleChange('due_datetime', `${d} ${DATE_ONLY_DUE_SENTINEL}`);
+      return;
+    }
+    const [hh, mm] = time.split(':').map((x) => parseInt(x, 10));
     const [y, mo, da] = d.split('-').map((x) => parseInt(x, 10));
     const dt = DateTime.fromObject({ year: y, month: mo, day: da, hour: hh || 0, minute: mm || 0, second: 0 }, { zone });
     handleChange('due_datetime', dt.isValid ? dt.toFormat('yyyy-MM-dd HH:mm:ss') : undefined);
@@ -299,7 +312,7 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                   onChange={(e) => {
                     const v = e.target.value;
                     if (!v) handleChange('due_datetime', undefined);
-                    else setDueFromDateAndTime(v, toTimeValue(formData.due_datetime));
+                    else setDueFromDateAndTime(v, toTimeValue(formData.due_datetime, true));
                   }}
                   className="h-10 max-w-[220px]"
                 />
@@ -312,11 +325,14 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
                   id="task-due-time"
                   type="time"
                   step={900}
-                  value={toTimeValue(formData.due_datetime)}
+                  value={toTimeValue(formData.due_datetime, true)}
                   onChange={(e) => {
                     const v = e.target.value;
-                    if (!v) handleChange('due_datetime', undefined);
-                    else setDueFromDateAndTime(toDateValue(formData.due_datetime), v);
+                    if (!v) {
+                      const existingDate = toDateValue(formData.due_datetime);
+                      if (!existingDate) handleChange('due_datetime', undefined);
+                      else setDueFromDateAndTime(existingDate, '');
+                    } else setDueFromDateAndTime(toDateValue(formData.due_datetime), v);
                   }}
                   className="h-10"
                 />
@@ -336,6 +352,11 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
             <p className="text-[10px] text-muted-foreground">
               Optional — set a deadline or leave blank. Deadlines show on your calendar at the due time.
             </p>
+            {formData.due_datetime && !dueHasExplicitTime ? (
+              <p className="text-[10px] text-muted-foreground">
+                No due time set. This task will be treated as due by the end of that day.
+              </p>
+            ) : null}
             {!planSuggestLoading && planSuggestion?.due_in_sleep_or_wind_down ? (
               <p className="text-xs text-muted-foreground">Due falls during sleep or wind-down.</p>
             ) : null}
@@ -664,3 +685,6 @@ const TaskEditModal = ({ task, mode = 'edit', onClose, onSave, onDelete }: TaskE
 };
 
 export default TaskEditModal;
+
+
+

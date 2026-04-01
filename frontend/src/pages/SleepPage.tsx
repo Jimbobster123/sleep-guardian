@@ -11,6 +11,7 @@ import { formatDebtHours, formatHoursHoursMinutes, formatQualityPct } from '@/li
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import nightSky from '@/assets/night-sky-header.jpg';
 import { DateTime } from 'luxon';
 import { ChevronLeft, ChevronRight, Flame, Moon, Pencil, Shield } from 'lucide-react';
@@ -29,10 +30,13 @@ type SleepGoalSummary = {
 };
 
 type DailySleepLog = {
+  daily_sleep_log_id?: string;
+  log_date?: string;
   sleep_goal_hours: number;
   actual_sleep_hours: number;
   wake_up_count: number;
   mood: string;
+  factors?: string[];
   latency_minutes: number | null;
 };
 
@@ -195,18 +199,27 @@ const SleepPage = () => {
   }, [tonightWindow?.start_time, tonightWindow?.end_time, sleepRes?.goal?.target_bedtime, sleepRes?.goal?.target_wake_time]);
 
   const openMissingLogEditor = useCallback(() => {
-    const wakeDay = DateTime.fromFormat(insightDate, 'yyyy-MM-dd', { zone });
-    const nightStart = wakeDay.isValid ? wakeDay.minus({ days: 1 }) : DateTime.now().setZone(zone).minus({ days: 1 });
-    const target = estimateSleepGoalHoursForNightStartingOn(sleepRes, nightStart);
-    const goal = Number.isFinite(target) ? target : 8;
-    setLogGoalHours(goal.toFixed(1));
-    setLogActualHours(goal.toFixed(1));
-    setLogWakeCount('0');
-    setLogMood('okay');
-    setLogLatency('');
+    if (selectedLog) {
+      setLogGoalHours(Number(selectedLog.sleep_goal_hours).toFixed(1));
+      setLogActualHours(Number(selectedLog.actual_sleep_hours).toFixed(1));
+      setLogWakeCount(String(Math.max(0, Math.floor(Number(selectedLog.wake_up_count) || 0))));
+      const normalizedMood = String(selectedLog.mood || '').toLowerCase() as DailySleepMood;
+      setLogMood(['exhausted', 'tired', 'okay', 'good', 'energized'].includes(normalizedMood) ? normalizedMood : 'okay');
+      setLogLatency(selectedLog.latency_minutes == null ? 'unspecified' : String(selectedLog.latency_minutes));
+    } else {
+      const wakeDay = DateTime.fromFormat(insightDate, 'yyyy-MM-dd', { zone });
+      const nightStart = wakeDay.isValid ? wakeDay.minus({ days: 1 }) : DateTime.now().setZone(zone).minus({ days: 1 });
+      const target = estimateSleepGoalHoursForNightStartingOn(sleepRes, nightStart);
+      const goal = Number.isFinite(target) ? target : 8;
+      setLogGoalHours(goal.toFixed(1));
+      setLogActualHours(goal.toFixed(1));
+      setLogWakeCount('0');
+      setLogMood('okay');
+      setLogLatency('unspecified');
+    }
     setLogMissingError(null);
     setLogMissingOpen(true);
-  }, [insightDate, zone, sleepRes]);
+  }, [insightDate, zone, sleepRes, selectedLog]);
 
   const saveTonightGoal = useCallback(async () => {
     if (!token) return;
@@ -275,7 +288,7 @@ const SleepPage = () => {
         wake_up_count: Math.floor(Number(logWakeCount)),
         mood: logMood,
         factors: [] as string[],
-        latency_minutes: logLatency ? Number(logLatency) : null,
+        latency_minutes: logLatency && logLatency !== 'unspecified' ? Number(logLatency) : null,
       };
       const res = await apiJson<{ log: DailySleepLog | null }>('/api/me/daily-sleep-log', {
         method: 'PUT',
@@ -385,26 +398,31 @@ const SleepPage = () => {
             </button>
           </div>
           {selectedLog ? (
-            <div className="grid grid-cols-3 gap-2">
-              <div className="rounded-lg bg-muted/50 py-2.5 px-1 text-center min-w-0">
-                <p className="mt-1 font-display text-lg font-bold text-foreground tabular-nums">
-                  {formatQualityPct(homeQualityPct)}
-                </p>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Quality</p>
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-lg bg-muted/50 py-2.5 px-1 text-center min-w-0">
+                  <p className="mt-1 font-display text-lg font-bold text-foreground tabular-nums">
+                    {formatQualityPct(homeQualityPct)}
+                  </p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Quality</p>
+                </div>
+                <div className="rounded-lg bg-muted/50 py-2.5 px-1 text-center min-w-0">
+                  <p className="mt-1 font-display text-lg font-bold text-foreground tabular-nums">
+                    {formatHoursHoursMinutes(homeTimeInBedHours)}
+                  </p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Time in bed</p>
+                </div>
+                <div className="rounded-lg bg-muted/50 py-2.5 px-1 text-center min-w-0">
+                  <p className="mt-1 font-display text-lg font-bold text-foreground tabular-nums">
+                    {formatDebtHours(homeDebt7d)}
+                  </p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Debt</p>
+                </div>
               </div>
-              <div className="rounded-lg bg-muted/50 py-2.5 px-1 text-center min-w-0">
-                <p className="mt-1 font-display text-lg font-bold text-foreground tabular-nums">
-                  {formatHoursHoursMinutes(homeTimeInBedHours)}
-                </p>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Time in bed</p>
-              </div>
-              <div className="rounded-lg bg-muted/50 py-2.5 px-1 text-center min-w-0">
-                <p className="mt-1 font-display text-lg font-bold text-foreground tabular-nums">
-                  {formatDebtHours(homeDebt7d)}
-                </p>
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Debt</p>
-              </div>
-            </div>
+              <Button type="button" size="sm" variant="outline" className="mt-3" onClick={openMissingLogEditor}>
+                Edit log
+              </Button>
+            </>
           ) : (
             <div className="rounded-lg bg-muted/40 px-3 py-3">
               <p className="text-sm text-muted-foreground">No sleep data logged.</p>
@@ -474,9 +492,9 @@ const SleepPage = () => {
         <Dialog open={logMissingOpen} onOpenChange={setLogMissingOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>Log this night</DialogTitle>
+              <DialogTitle>{selectedLog ? 'Edit log' : 'Log this night'}</DialogTitle>
               <DialogDescription>
-                Add sleep data for {insightTitle}.
+                {selectedLog ? `Update sleep data for ${insightTitle}.` : `Add sleep data for ${insightTitle}.`}
               </DialogDescription>
             </DialogHeader>
             <div className="grid grid-cols-2 gap-3">
@@ -508,17 +526,18 @@ const SleepPage = () => {
               </div>
               <div className="space-y-1 col-span-2">
                 <label className="text-xs font-medium text-foreground">Time to fall asleep</label>
-                <select
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={logLatency}
-                  onChange={(e) => setLogLatency(e.target.value)}
-                >
-                  <option value="">Not set</option>
-                  <option value="15">Under 15 min</option>
-                  <option value="30">About 30 min</option>
-                  <option value="45">About 45 min</option>
-                  <option value="60">1 hour or more</option>
-                </select>
+                <Select value={logLatency} onValueChange={setLogLatency}>
+                  <SelectTrigger className="h-10 w-full">
+                    <SelectValue placeholder="Not set" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unspecified">Not set</SelectItem>
+                    <SelectItem value="15">Under 15 min</SelectItem>
+                    <SelectItem value="30">About 30 min</SelectItem>
+                    <SelectItem value="45">About 45 min</SelectItem>
+                    <SelectItem value="60">1 hour or more</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             {logMissingError ? <p className="text-xs text-destructive">{logMissingError}</p> : null}
@@ -527,7 +546,7 @@ const SleepPage = () => {
                 Cancel
               </Button>
               <Button onClick={() => void saveMissingLog()} disabled={savingMissingLog}>
-                {savingMissingLog ? 'Savingâ€¦' : 'Save log'}
+                {savingMissingLog ? 'Saving…' : selectedLog ? 'Save changes' : 'Save log'}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -539,3 +558,4 @@ const SleepPage = () => {
 };
 
 export default SleepPage;
+

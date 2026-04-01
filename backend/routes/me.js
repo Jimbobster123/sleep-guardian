@@ -80,6 +80,20 @@ function toPgTimestampLocal(date) {
   return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
 }
 
+function shiftTimeStringByMinutes(value, deltaMinutes) {
+  const m = String(value || '').trim().match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return value;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  const ss = Number(m[3] || '0');
+  const totalSeconds = (((hh * 60) + mm) * 60 + ss + (Math.round(deltaMinutes) * 60)) % 86400;
+  const normalized = totalSeconds < 0 ? totalSeconds + 86400 : totalSeconds;
+  const outH = Math.floor(normalized / 3600);
+  const outM = Math.floor((normalized % 3600) / 60);
+  const outS = normalized % 60;
+  return `${String(outH).padStart(2, '0')}:${String(outM).padStart(2, '0')}:${String(outS).padStart(2, '0')}`;
+}
+
 function parsePositiveInt(value, fallback = 1) {
   const n = Number(value);
   return Number.isInteger(n) && n > 0 ? n : fallback;
@@ -941,29 +955,86 @@ router.post('/schedule/suggestions', requireAuth, async (req, res) => {
 // Optionally includes a proposed event time so the shifted window avoids that event.
 router.post('/sleep-window/apply-suggestion', requireAuth, async (req, res) => {
   try {
-    const { date, proposed_event } = req.body || {};
+    const { date, proposed_event, sleep_window: requestedSleepWindow, preferred_sleep_window: requestedPreferredSleepWindow, anchor_date: requestedAnchorDate } = req.body || {};
     const goal = await getActiveSleepGoal(req.user.user_id);
     if (!goal) return res.status(404).json({ error: 'No active sleep goal found' });
+    const existingWindows = await getSleepWindows(goal.sleep_goal_id);
 
-    const result = await buildScheduleSuggestions({
-      userId: req.user.user_id,
-      date,
-      proposedEvent: proposed_event
-        ? { start_datetime: proposed_event.start_datetime, end_datetime: proposed_event.end_datetime }
-        : null,
-    });
+    let result = null;
+    const hasRequestedWindow =
+      requestedSleepWindow &&
+      typeof requestedSleepWindow.start === 'string' &&
+      typeof requestedSleepWindow.end === 'string';
+    const hasRequestedPreferredWindow =
+      requestedPreferredSleepWindow &&
+      typeof requestedPreferredSleepWindow.start === 'string' &&
+      typeof requestedPreferredSleepWindow.end === 'string';
+
+    if (hasRequestedWindow) {
+      result = {
+        sleep_window: requestedSleepWindow,
+        preferred_sleep_window: hasRequestedPreferredWindow ? requestedPreferredSleepWindow : requestedSleepWindow,
+        moved_sleep_window:
+          !hasRequestedPreferredWindow ||
+          requestedPreferredSleepWindow.start !== requestedSleepWindow.start ||
+          requestedPreferredSleepWindow.end !== requestedSleepWindow.end,
+        anchor_date: typeof requestedAnchorDate === 'string' && requestedAnchorDate.trim() ? requestedAnchorDate.trim() : date,
+      };
+    } else {
+      result = await buildScheduleSuggestions({
+        userId: req.user.user_id,
+        date,
+        proposedEvent: proposed_event
+          ? { start_datetime: proposed_event.start_datetime, end_datetime: proposed_event.end_datetime }
+          : null,
+      });
+    }
 
     const anchorDatePart = String(result.anchor_date || '').trim() || String(result.sleep_window?.start || '').split(' ')[0];
     const dow = anchorDatePart ? new Date(`${anchorDatePart}T00:00:00`).getDay() : new Date(`${date}T00:00:00`).getDay();
     const startTime = String(result.sleep_window?.start || '').split(' ')[1] || null;
     const endTime = String(result.sleep_window?.end || '').split(' ')[1] || null;
     if (!startTime || !endTime) return res.status(500).json({ error: 'Failed to compute sleep window times' });
+    const preferredStart = parseDateInput(result.preferred_sleep_window?.start);
+    const shiftedStart = parseDateInput(result.sleep_window?.start);
+    const deltaMinutes =
+      preferredStart && shiftedStart
+        ? Math.round((shiftedStart.getTime() - preferredStart.getTime()) / 60000)
+        : 0;
 
-    await upsertSleepWindow(goal.sleep_goal_id, { day_of_week: dow, start_time: startTime, end_time: endTime });
+    if (existingWindows.length > 0) {
+      for (const window of existingWindows) {
+        await upsertSleepWindow(goal.sleep_goal_id, {
+          day_of_week: Number(window.day_of_week),
+          start_time: shiftTimeStringByMinutes(window.start_time, deltaMinutes),
+          end_time: shiftTimeStringByMinutes(window.end_time, deltaMinutes),
+        });
+      }
+      await upsertSleepWindow(goal.sleep_goal_id, { day_of_week: dow, start_time: startTime, end_time: endTime });
+    } else {
+      await upsertSleepWindow(goal.sleep_goal_id, { day_of_week: dow, start_time: startTime, end_time: endTime });
+    }
+
+    if (deltaMinutes !== 0) {
+      await createOrUpdateSleepGoal(req.user.user_id, {
+        goal_type: goal.goal_type,
+        target_sleep_minutes: goal.target_sleep_minutes ?? null,
+        target_bedtime: goal.target_bedtime ? shiftTimeStringByMinutes(goal.target_bedtime, deltaMinutes) : null,
+        target_wake_time: goal.target_wake_time ? shiftTimeStringByMinutes(goal.target_wake_time, deltaMinutes) : null,
+        bedtime_flex_minutes: goal.bedtime_flex_minutes ?? 0,
+      });
+    }
+    const updatedGoal = await getActiveSleepGoal(req.user.user_id);
+    const updatedWindows = updatedGoal ? await getSleepWindows(updatedGoal.sleep_goal_id) : [];
     res.json({
       ok: true,
       sleep_window: result.sleep_window,
+      preferred_sleep_window: result.preferred_sleep_window,
       moved_sleep_window: Boolean(result.moved_sleep_window),
+      shift_minutes: deltaMinutes,
+      anchor_date: anchorDatePart,
+      goal: updatedGoal,
+      windows: updatedWindows,
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to apply sleep window suggestion', details: err.message });

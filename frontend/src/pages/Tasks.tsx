@@ -47,6 +47,9 @@ function formatDateTime(dateString: string | undefined) {
   if (!dateString) return undefined;
   const d = new Date(dateString);
   if (Number.isNaN(d.getTime())) return undefined;
+  if (String(dateString).trim().endsWith('23:59:59')) {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
   return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
