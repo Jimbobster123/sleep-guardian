@@ -399,7 +399,8 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
           : getPlanBedWakeDateTimesForWakeDate(sleepSummary, zone, modalDateStr);
 
       if (plan) {
-        // Back-compat: older logs only stored duration (hours). Infer offsets from hours delta.
+        // Without storing the two slider offsets in the DB, we can only infer them
+        // from the saved duration when there is no local browser draft for this date.
         const planH = hoursBetweenBedAndWake(plan.bed, plan.wake);
         const actualH = Number(modalLog.actual_sleep_hours);
         const diffMin = Math.round((actualH - planH) * 60);
