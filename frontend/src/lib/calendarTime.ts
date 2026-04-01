@@ -208,3 +208,77 @@ export function hourRowOverlapsSuggestedWindDown(
   const row1 = row0.plus({ hours: 1 });
   return wallIntervalsOverlap(row0, row1, wStart, suggestedBed);
 }
+
+type SleepWindowOverlapOpts = {
+  bedHour: number;
+  /** End of sleep on the same calendar day when bed is before wake (nap / same-day segment). */
+  wakeHour: number;
+  bedHourPrev: number;
+  wakeHourPrev: number;
+  /** True when today’s sleep episode crosses midnight (bedtime hour ≥ wake hour). */
+  currentCrossesMidnight: boolean;
+  /** True when the morning [midnight, wake) on this date belongs to the previous night’s episode. */
+  prevMorningSegment: boolean;
+};
+
+/**
+ * True if the calendar hour row overlaps actual sleep [bed, wake) on this date — using wall intervals
+ * instead of floor(bedHour) so wind-down minutes before bed don’t get painted as sleep.
+ */
+export function hourRowOverlapsSleepWindow(
+  dateStr: string,
+  wallHour: number,
+  zone: string,
+  opts: SleepWindowOverlapOpts,
+): boolean {
+  const row0 = localHourRowStartOnDate(dateStr, wallHour, zone);
+  if (!row0) return false;
+  const row1 = row0.plus({ hours: 1 });
+
+  const ranges: Array<[DateTime, DateTime]> = [];
+
+  if (opts.prevMorningSegment) {
+    const wakeMorning = wallBedtimeOnDate(dateStr, opts.wakeHourPrev, zone);
+    if (wakeMorning?.isValid) {
+      const dayStart = DateTime.fromISO(`${dateStr}T00:00:00`, { zone });
+      if (wakeMorning > dayStart) {
+        ranges.push([dayStart, wakeMorning]);
+      }
+    }
+  }
+
+  if (opts.currentCrossesMidnight) {
+    const bedEvening = wallBedtimeOnDate(dateStr, opts.bedHour, zone);
+    const dayEnd = DateTime.fromISO(`${dateStr}T00:00:00`, { zone }).plus({ days: 1 });
+    if (bedEvening?.isValid && bedEvening < dayEnd) {
+      ranges.push([bedEvening, dayEnd]);
+    }
+  } else {
+    const bed = wallBedtimeOnDate(dateStr, opts.bedHour, zone);
+    const wake = wallBedtimeOnDate(dateStr, opts.wakeHour, zone);
+    if (bed?.isValid && wake?.isValid && wake > bed) {
+      ranges.push([bed, wake]);
+    }
+  }
+
+  return ranges.some(([a, b]) => wallIntervalsOverlap(row0, row1, a, b));
+}
+
+/**
+ * True if the hour row overlaps [wake, wake + durationHours) — post-wake buffer (e.g. 30 minutes).
+ */
+export function hourRowOverlapsPostWake(
+  dateStr: string,
+  wallHour: number,
+  zone: string,
+  wakeHourFloat: number,
+  durationHours = 0.5,
+): boolean {
+  const wake = wallBedtimeOnDate(dateStr, wakeHourFloat, zone);
+  if (!wake?.isValid) return false;
+  const end = wake.plus({ minutes: Math.round(durationHours * 60) });
+  const row0 = localHourRowStartOnDate(dateStr, wallHour, zone);
+  if (!row0) return false;
+  const row1 = row0.plus({ hours: 1 });
+  return wallIntervalsOverlap(row0, row1, wake, end);
+}

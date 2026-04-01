@@ -44,7 +44,8 @@ import {
   formatTimestampForApi,
   formatWallTime12h,
   hourFloatInZone,
-  hourRowOverlapsSuggestedWindDown,
+  hourRowOverlapsPostWake,
+  hourRowOverlapsSleepWindow,
   hourRowOverlapsWindDown,
   parseApiTimestamp,
   parseApiTimestampToDate,
@@ -406,7 +407,7 @@ const CalendarPage = () => {
       const w = suggestedBedDateTime.minus({ minutes: windDownFlexMins });
       return w.isValid ? w.hour + w.minute / 60 + w.second / 3600 : null;
     }
-    if (sleepTimes.source === 'saved') {
+    if (sleepTimes.source === 'saved' || (sleepTimes.source === 'suggested' && !suggestionCoversBedOnSelectedDay)) {
       return (sleepTimes.bedHour - windDownFlexMins / 60 + 24) % 24;
     }
     return null;
@@ -414,7 +415,11 @@ const CalendarPage = () => {
 
   const sleepMarkerLabels = useMemo(() => {
     const wind = windDownFlexMins;
-    if (sleepTimes.source === 'suggested') {
+    const useSavedMarkerLabels =
+      sleepTimes.source === 'saved' ||
+      (sleepTimes.source === 'suggested' && !suggestionCoversBedOnSelectedDay);
+
+    if (sleepTimes.source === 'suggested' && !useSavedMarkerLabels) {
       const bedDt = suggestedBedDateTime;
       const wakeDt = suggestedEndDt;
       const bedLabel = bedDt?.isValid ? bedDt.toFormat('h:mm a') : null;
@@ -452,6 +457,7 @@ const CalendarPage = () => {
     windowForDay?.end_time,
     sleep?.goal?.target_bedtime,
     sleep?.goal?.target_wake_time,
+    suggestionCoversBedOnSelectedDay,
   ]);
 
   // For overnight sleep windows (bedtime > wake time), early-morning hours
@@ -1757,56 +1763,34 @@ const CalendarPage = () => {
                   })()
                 ) : null}
                 {visibleHours.map(({ hour }) => {
-                  const currentCrossesMidnight = sleepTimes.bedHour >= sleepTimes.wakeHour;
-
-                  // Only apply the "previous day episode" adjustment to saved sleep windows.
-                  // When using suggested sleep windows, the timestamps already include the correct episode boundaries.
                   const isSavedMode = sleepTimes.source === 'saved';
-                  const prevCrossesMidnight = isSavedMode ? bedHourPrev >= wakeHourPrev : false;
-                  const inPrevEpisode = isSavedMode ? prevCrossesMidnight && hour < Math.floor(wakeHourPrev) : false;
 
-                  const suggestedUsesPrevWakeTail =
-                    sleepTimes.source === 'suggested' &&
-                    !suggestionCoversWakeOnSelectedDay &&
-                    bedHourPrev >= wakeHourPrev;
-                  const inSuggestedPrevTail = suggestedUsesPrevWakeTail && hour < Math.floor(wakeHourPrev);
                   const suggestedWakeHourForRows = suggestionCoversWakeOnSelectedDay ? sleepTimes.wakeHour : wakeHourPrev;
 
-                  const inSleepWindow = isSavedMode
-                    ? currentCrossesMidnight
-                      ? hour >= Math.floor(sleepTimes.bedHour) || inPrevEpisode
-                      : (hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(sleepTimes.wakeHour)) || inPrevEpisode
-                    : currentCrossesMidnight
-                      ? hour >= Math.floor(sleepTimes.bedHour) || inSuggestedPrevTail
-                      : (hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(suggestedWakeHourForRows)) || inSuggestedPrevTail;
+                  const currentCrossesMidnight = sleepTimes.bedHour >= sleepTimes.wakeHour;
+                  const wakeEndForSameDay =
+                    sleepTimes.source === 'suggested' ? suggestedWakeHourForRows : sleepTimes.wakeHour;
+
+                  const prevMorningSegment =
+                    bedHourPrev >= wakeHourPrev &&
+                    (isSavedMode || sleepTimes.source === 'suggested');
+
+                  const inSleepWindow = hourRowOverlapsSleepWindow(dateStr, hour, zone, {
+                    bedHour: sleepTimes.bedHour,
+                    wakeHour: wakeEndForSameDay,
+                    bedHourPrev,
+                    wakeHourPrev,
+                    currentCrossesMidnight,
+                    prevMorningSegment,
+                  });
 
                   const isBedRow = hour === Math.floor(sleepTimes.bedHour);
-                  const morningSleepTail = isSavedMode && inPrevEpisode;
 
-                  let inWindDown = false;
-                  if (windDownFlexMins > 0 && !morningSleepTail) {
-                    if (sleepTimes.source === 'suggested' && suggestedBedDateTime) {
-                      inWindDown = hourRowOverlapsSuggestedWindDown(
-                        dateStr,
-                        hour,
-                        zone,
-                        suggestedBedDateTime,
-                        windDownFlexMins,
-                      );
-                    } else if (sleepTimes.source === 'saved') {
-                      inWindDown = hourRowOverlapsWindDown(
-                        dateStr,
-                        hour,
-                        zone,
-                        sleepTimes.bedHour,
-                        windDownFlexMins,
-                      );
-                    }
-                  }
+                  // Wind-down is only the minute-accurate overlay when flex > 0 (avoids row-level overlap with sleep).
 
                   // Wake is shown only via the minute-accurate overlay (30m after wake) — not another full hour row,
                   // otherwise the calendar shows a double yellow block (overlay + row).
-                  const timelineBg = inSleepWindow ? 'sleep-window-bg' : inWindDown ? 'wind-down-bg' : '';
+                  const timelineBg = inSleepWindow ? 'sleep-window-bg' : '';
                   return (
                     <div
                       key={hour}
@@ -2136,12 +2120,18 @@ const CalendarPage = () => {
                   const currentCrossesMidnight = bedHour >= wakeHour;
                   const prevCrossesMidnight = prevBedHour >= prevWakeHour;
 
-                  const inSleepWindow = currentCrossesMidnight
-                    ? hour >= Math.floor(bedHour) || (prevCrossesMidnight && hour < Math.floor(prevWakeHour))
-                    : (hour >= Math.floor(bedHour) && hour < Math.floor(wakeHour)) || (prevCrossesMidnight && hour < Math.floor(prevWakeHour));
+                  const prevMorningSegmentWeek = prevCrossesMidnight;
+                  const inSleepWindow = hourRowOverlapsSleepWindow(dayKey, hour, zone, {
+                    bedHour,
+                    wakeHour,
+                    bedHourPrev: prevBedHour,
+                    wakeHourPrev: prevWakeHour,
+                    currentCrossesMidnight,
+                    prevMorningSegment: prevMorningSegmentWeek,
+                  });
 
                   const wakeBoundaryHour = prevCrossesMidnight ? prevWakeHour : wakeHour;
-                  const inWakeWindow = hour >= Math.floor(wakeBoundaryHour) && hour < Math.floor(wakeBoundaryHour) + 1;
+                  const inWakePostWeek = hourRowOverlapsPostWake(dayKey, hour, zone, wakeBoundaryHour, 0.5);
                   const hourStart = hour;
                   const hourEnd = hour + 1;
                   const dayEvents = (eventsForWeekDay[dayKey] || []).filter((x) => {
@@ -2150,16 +2140,15 @@ const CalendarPage = () => {
                     const endH = hourFloatInZone(x.end, zone);
                     return startH < hourEnd && endH > hourStart;
                   });
-                  const weekMorningSleepTail = prevCrossesMidnight && hour < Math.floor(prevWakeHour);
                   const inWindDownWeek =
-                    windDownFlexMins > 0 && !weekMorningSleepTail
+                    windDownFlexMins > 0
                       ? hourRowOverlapsWindDown(dayKey, hour, zone, bedHour, windDownFlexMins)
                       : false;
-                  const bgStyles = inSleepWindow
-                    ? 'sleep-window-bg'
-                    : inWindDownWeek
-                      ? 'wind-down-bg'
-                      : inWakeWindow
+                  const bgStyles = inWindDownWeek
+                    ? 'wind-down-bg'
+                    : inSleepWindow
+                      ? 'sleep-window-bg'
+                      : inWakePostWeek
                         ? 'wake-window-bg'
                         : '';
                   return (
