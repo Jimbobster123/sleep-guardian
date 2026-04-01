@@ -389,30 +389,32 @@ export default function SleepGoalForm({
             {DAYS.map(({ dow, label }) => (
               <div
                 key={dow}
-                className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.6fr)] items-center gap-3"
+                className="grid grid-cols-1 gap-2 rounded-lg border border-border/40 bg-muted/10 p-3 sm:bg-transparent sm:p-0 sm:border-0 sm:rounded-none sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.6fr)] sm:items-center sm:gap-3"
               >
-                <div className="text-xs font-semibold tracking-wide text-foreground uppercase">{label}</div>
-                <div className="flex items-center gap-2">
+                <div className="text-xs font-semibold tracking-wide text-foreground uppercase sm:pt-0">
+                  {label}
+                </div>
+                <div className="flex items-center justify-between gap-3 sm:justify-start sm:gap-2">
                   <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Bed</Label>
                   <input
                     type="time"
-                    className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                    className="h-10 w-[10.5rem] sm:w-full sm:max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
                     value={times[dow]?.bed || "23:00"}
                     onChange={(e) => setTime(dow, "bed", e.target.value)}
                   />
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-3 sm:justify-start sm:gap-2">
                   <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Wake</Label>
                   <input
                     type="time"
-                    className="h-10 w-full max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
+                    className="h-10 w-[10.5rem] sm:w-full sm:max-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
                     value={times[dow]?.wake || "07:00"}
                     onChange={(e) => setTime(dow, "wake", e.target.value)}
                   />
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-3 sm:justify-start sm:gap-2">
                   <Label className="text-[11px] text-muted-foreground whitespace-nowrap">Hours</Label>
-                  <div className="h-10 min-w-[3rem] flex items-center justify-center rounded-md bg-accent/20 text-accent px-3 text-sm font-semibold">
+                  <div className="h-10 w-[4.25rem] sm:w-auto min-w-[3rem] flex items-center justify-center rounded-md bg-accent/20 text-accent px-3 text-sm font-semibold tabular-nums">
                     {hoursInWindow(times[dow]?.bed || "23:00", times[dow]?.wake || "07:00")}
                   </div>
                 </div>

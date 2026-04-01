@@ -438,7 +438,7 @@ export default function Profile() {
             <p className="text-sm font-medium text-foreground">
               {[user?.first_name, user?.last_name].filter(Boolean).join(" ") || "Your account"}
             </p>
-            <p className="text-xs text-muted-foreground">{user?.email}</p>
+            <p className="text-xs text-foreground/70">{user?.email}</p>
           </div>
           <button
             onClick={logout}
@@ -446,7 +446,7 @@ export default function Profile() {
             className="group relative flex items-center justify-center w-9 h-9 rounded-lg hover:bg-muted/50 transition-colors"
           >
             <LogOut className="w-4.5 h-4.5 text-muted-foreground" />
-            <span className="absolute right-full mr-2 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+            <span className="absolute right-full mr-2 top-1/2 -translate-y-1/2 text-sm font-medium text-foreground/70 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
               Logout
             </span>
           </button>
@@ -454,7 +454,7 @@ export default function Profile() {
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <h2 className="text-sm font-semibold text-foreground mb-2">Morning sleep log</h2>
-          <p className="text-xs text-muted-foreground mb-3">
+          <p className="text-xs text-foreground/70 mb-3">
             Log how last night went — quality, time in bed, and what affected sleep. This updates your home
             suggestions.
           </p>
@@ -470,7 +470,7 @@ export default function Profile() {
           className="bg-card rounded-xl p-4 shadow-sm border border-border/50"
         >
           <h2 className="text-sm font-semibold text-foreground mb-1">Streak settings</h2>
-          <p className="text-xs text-muted-foreground mb-3">
+          <p className="text-xs text-foreground/70 mb-3">
             Choose what counts toward your day streak on the home screen.
           </p>
           <RadioGroup
@@ -485,7 +485,7 @@ export default function Profile() {
                 <Label htmlFor="streak-recording" className="text-sm font-medium cursor-pointer">
                   Daily Logger
                 </Label>
-                <p className="text-xs text-muted-foreground leading-relaxed">
+                <p className="text-xs text-foreground/70 leading-relaxed">
                   Increment my streak every day I record my sleep.
                 </p>
               </div>
@@ -496,13 +496,13 @@ export default function Profile() {
                 <Label htmlFor="streak-goal" className="text-sm font-medium cursor-pointer">
                   Goal Crusher
                 </Label>
-                <p className="text-xs text-muted-foreground leading-relaxed">
+                <p className="text-xs text-foreground/70 leading-relaxed">
                   Only increment my streak on days I hit my sleep goal.
                 </p>
               </div>
             </div>
           </RadioGroup>
-          <p className="text-xs text-muted-foreground mt-3 tabular-nums">
+          <p className="text-xs text-foreground/70 mt-3 tabular-nums">
             Daily log streak:{' '}
             <span className="font-medium text-foreground">
               {streakRecordingDisplay(user) ?? "—"}
@@ -529,14 +529,18 @@ export default function Profile() {
               </div>
               <div>
                 <p className="text-sm font-semibold text-foreground">Crisis / Exam Mode</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-foreground/70">
                   {crisisMode ? "Active - strategic recovery focus" : "For exams, deadlines, INTEX weeks"}
                 </p>
               </div>
             </div>
             <button
+              type="button"
               onClick={() => setCrisisMode(!crisisMode)}
               className={`relative w-12 h-7 rounded-full transition-colors ${crisisMode ? "bg-crisis" : "bg-muted"}`}
+              role="switch"
+              aria-checked={crisisMode}
+              aria-label="Crisis / Exam Mode"
             >
               <div
                 className={`absolute top-1 w-5 h-5 rounded-full bg-card shadow transition-transform ${
@@ -546,11 +550,11 @@ export default function Profile() {
             </button>
           </div>
           {crisisMode && (
-            <div className="mt-3 text-xs text-foreground/80 space-y-1">
-              <p>- Goal shifts to "mitigate damage"</p>
-              <p>- Power nap and 90-minute cycle suggestions enabled</p>
-              <p>- Streak penalties relaxed</p>
-            </div>
+            <ul className="mt-3 text-xs text-foreground/80 space-y-1 list-disc pl-4">
+              <li>Goal shifts to "mitigate damage"</li>
+              <li>Power nap and 90-minute cycle suggestions enabled</li>
+              <li>Streak penalties relaxed</li>
+            </ul>
           )}
         </div>
 
@@ -566,14 +570,18 @@ export default function Profile() {
               </div>
               <div>
                 <p className="text-sm font-semibold text-foreground">Dark Mode</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-foreground/70">
                   {theme === "dark" ? "Night theme active" : "Switch to night theme"}
                 </p>
               </div>
             </div>
             <button
+              type="button"
               onClick={toggleTheme}
               className={`relative w-12 h-7 rounded-full transition-colors ${theme === "dark" ? "bg-accent" : "bg-muted"}`}
+              role="switch"
+              aria-checked={theme === "dark"}
+              aria-label="Dark Mode"
             >
               <div
                 className={`absolute top-1 w-5 h-5 rounded-full bg-card shadow transition-transform ${
@@ -582,24 +590,6 @@ export default function Profile() {
               />
             </button>
           </div>
-        </div>
-
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
-          <p className="text-sm font-semibold text-foreground mb-2">Quick Adjustments</p>
-          <div className="flex gap-2 flex-wrap">
-            {["Late night", "Early morning", "Traveling", "Sick"].map((label) => (
-              <button
-                key={label}
-                type="button"
-                className="text-xs bg-muted text-foreground rounded-full px-3 py-1.5 hover:bg-accent/10 hover:text-accent transition-colors"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-2">
-            The app will adjust intelligently without breaking your streak.
-          </p>
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
@@ -613,7 +603,9 @@ export default function Profile() {
                 </AvatarFallback>
               </Avatar>
             </label>
-            <p className="text-xs font-medium text-foreground">Profile Photo <span className="text-muted-foreground font-normal">(optional)</span></p>
+            <p className="text-xs font-medium text-foreground">
+              Profile Photo <span className="text-foreground/70 font-normal">(optional)</span>
+            </p>
             <input
               id="profile-photo"
               type="file"
@@ -640,33 +632,35 @@ export default function Profile() {
             >
               {pendingPhotoDataUrl ? "Photo selected — click to change" : "Upload photo"}
             </label>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[11px] text-foreground/70">
               Save the Profile section below to apply your new photo.
             </p>
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="space-y-1">
-              <Label>Email Address</Label>
+              <Label htmlFor="profile-email">Email Address</Label>
               <Input
+                id="profile-email"
                 type="email"
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-[11px] text-foreground/70">
                 Used for login and optional bedtime reminder emails.
               </p>
             </div>
             <div className="space-y-1">
-              <Label>Phone Number</Label>
+              <Label htmlFor="profile-phone">Phone Number</Label>
               <Input
+                id="profile-phone"
                 type="tel"
                 autoComplete="tel"
                 value={phoneNumber}
                 onChange={(e) => setPhoneNumber(e.target.value)}
                 placeholder="+1 555 123 4567"
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-[11px] text-foreground/70">
                 Optional. Only used if you want bedtime reminders by text message.
               </p>
             </div>
@@ -697,7 +691,7 @@ export default function Profile() {
           </div>
 
           <div className="flex justify-end pt-4">
-            <Button onClick={saveAll} disabled={profileBusy}>
+            <Button type="button" onClick={saveAll} disabled={profileBusy}>
               {profileBusy ? "Saving..." : "Save Profile"}
             </Button>
           </div>
@@ -707,7 +701,7 @@ export default function Profile() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <h2 className="text-sm font-semibold text-foreground">Bedtime Reminder</h2>
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="text-xs text-foreground/70 mt-1">
                 Choose how to be reminded before your bedtime goal.
               </p>
             </div>
@@ -715,19 +709,26 @@ export default function Profile() {
               <span className="text-xs text-muted-foreground">
                 {reminderEnabled ? "Enabled" : "Disabled"}
               </span>
-              <Switch checked={reminderEnabled} onCheckedChange={setReminderEnabled} />
+              <Switch
+                id="bedtime-reminder-enabled"
+                checked={reminderEnabled}
+                onCheckedChange={setReminderEnabled}
+                aria-label="Enable bedtime reminder"
+              />
             </div>
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 mt-4">
             <div className="space-y-1">
-              <Label>Reminder Method</Label>
+              <Label id="reminder-method-label" htmlFor="reminder-method">
+                Reminder Method
+              </Label>
               <Select
                 value={reminderMethod}
                 onValueChange={(value: ReminderMethod) => setReminderMethod(value)}
                 disabled={!reminderEnabled}
               >
-                <SelectTrigger>
+                <SelectTrigger id="reminder-method" aria-labelledby="reminder-method-label">
                   <SelectValue placeholder="Choose a method" />
                 </SelectTrigger>
                 <SelectContent>
@@ -739,8 +740,9 @@ export default function Profile() {
               </Select>
             </div>
             <div className="space-y-1">
-              <Label>Minutes Before Bedtime</Label>
+              <Label htmlFor="reminder-minutes">Minutes Before Bedtime</Label>
               <Input
+                id="reminder-minutes"
                 type="number"
                 min="0"
                 max="1440"
