@@ -1,9 +1,4 @@
-import { promises as fs } from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PROFILE_PHOTO_DIR = path.join(__dirname, 'uploads', 'profile-photos');
+import pool from './db.js';
 
 const MIME_TO_EXTENSION = {
   'image/jpeg': 'jpg',
@@ -12,20 +7,9 @@ const MIME_TO_EXTENSION = {
   'image/gif': 'gif',
 };
 
-async function ensurePhotoDir() {
-  await fs.mkdir(PROFILE_PHOTO_DIR, { recursive: true });
-}
-
-export async function getExistingProfilePhotoFilename(userId) {
-  await ensurePhotoDir();
-  const files = await fs.readdir(PROFILE_PHOTO_DIR);
-  const prefix = `${userId}.`;
-  return files.find((file) => file.startsWith(prefix)) || null;
-}
-
 export async function getProfilePhotoUrl(userId) {
-  const file = await getExistingProfilePhotoFilename(userId);
-  return file ? `/uploads/profile-photos/${file}` : null;
+  const res = await pool.query('SELECT photo_url FROM "User" WHERE user_id = $1', [userId]);
+  return res.rows[0]?.photo_url ?? null;
 }
 
 export async function saveProfilePhoto(userId, imageDataUrl) {
@@ -40,8 +24,7 @@ export async function saveProfilePhoto(userId, imageDataUrl) {
 
   const mimeType = match[1];
   const base64 = match[2];
-  const extension = MIME_TO_EXTENSION[mimeType];
-  if (!extension) {
+  if (!MIME_TO_EXTENSION[mimeType]) {
     throw new Error('Only JPG, PNG, WEBP, and GIF profile photos are supported');
   }
 
@@ -51,15 +34,7 @@ export async function saveProfilePhoto(userId, imageDataUrl) {
     throw new Error('Profile photo must be between 1 byte and 5 MB');
   }
 
-  await ensurePhotoDir();
+  await pool.query('UPDATE "User" SET photo_url = $1 WHERE user_id = $2', [imageDataUrl, userId]);
 
-  const existing = await getExistingProfilePhotoFilename(userId);
-  if (existing) {
-    await fs.unlink(path.join(PROFILE_PHOTO_DIR, existing)).catch(() => {});
-  }
-
-  const filename = `${userId}.${extension}`;
-  await fs.writeFile(path.join(PROFILE_PHOTO_DIR, filename), buffer);
-
-  return `/uploads/profile-photos/${filename}?t=${Date.now()}`;
+  return imageDataUrl;
 }

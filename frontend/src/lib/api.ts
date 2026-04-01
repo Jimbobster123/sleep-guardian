@@ -11,6 +11,7 @@ export const API_BASE_URL = resolveApiBaseUrl();
 export function apiAssetUrl(path: string | null | undefined): string | null {
   if (!path) return null;
   if (/^https?:\/\//i.test(path)) return path;
+  if (/^data:/i.test(path)) return path;
 
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   if (API_BASE_URL) return `${API_BASE_URL}${normalizedPath}`;

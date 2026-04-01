@@ -235,7 +235,8 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const user = await getMeUserPayload(req.user.user_id, clientTimezoneHint(req));
     if (!user) return res.status(404).json({ error: 'User not found' });
-    const photo_url = await getProfilePhotoUrl(req.user.user_id);
+    let photo_url = null;
+    try { photo_url = await getProfilePhotoUrl(req.user.user_id); } catch { /* non-fatal */ }
     res.json({ user: { ...user, photo_url } });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load profile', details: err.message });
