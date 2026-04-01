@@ -4,6 +4,8 @@ import { Home, CheckSquare, CalendarDays, Moon, User, ClipboardList } from 'luci
 import { useApp } from '@/contexts/AppContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSleepCheckIn } from '@/contexts/SleepCheckInContext';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { apiAssetUrl } from '@/lib/api';
 
 const tabs = [
   { path: '/home', icon: Home, label: 'Home' },
@@ -17,7 +19,7 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { crisisMode } = useApp();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { openModal: openSleepLog } = useSleepCheckIn();
   const hideNav =
     location.pathname === '/' ||
@@ -47,6 +49,7 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
               <nav className="flex flex-wrap items-center justify-end gap-1" aria-label="Main">
                 {tabs.map(({ path, icon: Icon, label }) => {
                   const active = location.pathname === path;
+                  const isProfile = path === '/profile';
                   return (
                     <button
                       key={path}
@@ -60,7 +63,19 @@ const AppLayout = ({ children }: { children: ReactNode }) => {
                       aria-current={active ? 'page' : undefined}
                       aria-label={label}
                     >
-                      <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                      {isProfile && user ? (
+                        <Avatar className="h-6 w-6 shrink-0">
+                          {user.photo_url ? (
+                            <AvatarImage src={apiAssetUrl(user.photo_url) ?? undefined} alt="Profile" />
+                          ) : null}
+                          <AvatarFallback className="bg-accent/20 text-accent text-[10px] font-semibold">
+                            {(user.first_name?.[0] || user.email?.[0] || 'U').toUpperCase()}
+                            {(user.last_name?.[0] || '').toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                      ) : (
+                        <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                      )}
                       <span className="hidden text-sm font-medium md:inline">{label}</span>
                     </button>
                   );

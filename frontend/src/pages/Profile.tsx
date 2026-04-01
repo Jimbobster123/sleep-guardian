@@ -604,38 +604,45 @@ export default function Profile() {
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
           <h2 className="text-sm font-semibold text-foreground mb-3">Profile</h2>
-          <div className="flex flex-col items-center gap-3 mb-4">
-            <Avatar className="h-24 w-24 border border-border/50">
-              {displayPhotoUrl ? <AvatarImage src={displayPhotoUrl} alt="Profile photo preview" /> : null}
-              <AvatarFallback className="text-xl font-semibold">
-                {(first?.[0] || email?.[0] || "U").toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-            <div className="w-full space-y-1">
-              <Label htmlFor="profile-photo">Profile Photo (optional)</Label>
-              <Input
-                id="profile-photo"
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) {
-                    setPendingPhotoDataUrl(null);
-                    return;
-                  }
-                  try {
-                    setPendingPhotoDataUrl(await readFileAsDataUrl(file));
-                  } catch (err) {
-                    toast.error(err instanceof Error ? err.message : "Failed to load image.");
-                  } finally {
-                    e.currentTarget.value = "";
-                  }
-                }}
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Upload a new photo and save the Profile card to replace your current one.
-              </p>
-            </div>
+          <div className="flex flex-col items-center gap-2 mb-4">
+            <label htmlFor="profile-photo" className="cursor-pointer" title="Click to change photo">
+              <Avatar className="h-24 w-24 border border-border/50">
+                {displayPhotoUrl ? <AvatarImage src={displayPhotoUrl} alt="Profile photo preview" /> : null}
+                <AvatarFallback className="text-xl font-semibold">
+                  {(first?.[0] || email?.[0] || "U").toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+            </label>
+            <p className="text-xs font-medium text-foreground">Profile Photo <span className="text-muted-foreground font-normal">(optional)</span></p>
+            <input
+              id="profile-photo"
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              className="sr-only"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) {
+                  setPendingPhotoDataUrl(null);
+                  return;
+                }
+                try {
+                  setPendingPhotoDataUrl(await readFileAsDataUrl(file));
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Failed to load image.");
+                } finally {
+                  e.currentTarget.value = "";
+                }
+              }}
+            />
+            <label
+              htmlFor="profile-photo"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-input bg-background px-4 py-1.5 text-xs font-medium shadow-sm transition-colors hover:bg-muted/60"
+            >
+              {pendingPhotoDataUrl ? "Photo selected — click to change" : "Upload photo"}
+            </label>
+            <p className="text-[11px] text-muted-foreground">
+              Save the Profile section below to apply your new photo.
+            </p>
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="space-y-1">
@@ -831,39 +838,36 @@ export default function Profile() {
         </div>
 
         <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
-          <h2 className="text-sm font-semibold text-foreground mb-2">Google Calendar</h2>
-          <p className="text-xs text-muted-foreground">
-            Connect your Google Calendar for automatic sync of events between Luna and Google.
+          <h2 className="text-sm font-semibold text-foreground mb-2">Calendar Integration</h2>
+          <p className="text-xs text-muted-foreground mb-3">
+            Sync with Google Calendar or import events from an external calendar file.
           </p>
-          <div className="mt-3 flex items-center gap-3 flex-wrap">
-            <Button size="sm" onClick={connectGoogle} disabled={googleBusy}>
-              {googleBusy ? "Connecting..." : "Connect Google Calendar"}
+          <div className="flex items-center gap-3 flex-wrap">
+            <Button
+              size="sm"
+              onClick={() =>
+                toast("Coming soon", {
+                  description:
+                    "Calendar integration is not available in this demo, but will be fully supported in the release version.",
+                  duration: 4000,
+                })
+              }
+            >
+              Connect Google Calendar
             </Button>
-            <Button size="sm" variant="outline" onClick={syncGoogle} disabled={googleBusy}>
-              {googleBusy ? "Syncing..." : "Sync from Google"}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                toast("Coming soon", {
+                  description:
+                    "Calendar integration is not available in this demo, but will be fully supported in the release version.",
+                  duration: 4000,
+                })
+              }
+            >
+              Import .ics file
             </Button>
-          </div>
-        </div>
-
-        <div className="bg-card rounded-xl p-4 shadow-sm border border-border/50">
-          <h2 className="text-sm font-semibold text-foreground mb-2">Import calendar</h2>
-          <p className="text-xs text-muted-foreground">
-            Export your Google Calendar as an <span className="font-medium">.ics</span> file and import it here.
-          </p>
-          <div className="mt-3 flex items-center gap-3 flex-wrap">
-            <Label htmlFor="ics-upload" className="sr-only">Import .ics file</Label>
-            <input
-              id="ics-upload"
-              type="file"
-              accept=".ics,text/calendar"
-              disabled={icsBusy}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void importIcs(f);
-                e.currentTarget.value = "";
-              }}
-            />
-            <span className="text-xs text-muted-foreground">{icsBusy ? "Importing..." : ""}</span>
           </div>
         </div>
 
