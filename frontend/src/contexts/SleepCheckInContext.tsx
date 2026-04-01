@@ -128,6 +128,91 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const wasModalOpen = useRef(false);
+  const interactedRef = useRef(false);
+
+  const draftKey = useMemo(() => {
+    const uid = user?.user_id || user?.email || 'anon';
+    return `luna_sleep_checkin_draft:${uid}:${modalDateStr}`;
+  }, [modalDateStr, user?.email, user?.user_id]);
+
+  const persistDraft = useCallback(() => {
+    try {
+      const payload = {
+        v: 1,
+        date: modalDateStr,
+        actualSleep,
+        bedOffsetSteps,
+        wakeOffsetSteps,
+        wakeCount,
+        mood,
+        factors,
+        latency,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(draftKey, JSON.stringify(payload));
+    } catch {
+      /* ignore */
+    }
+  }, [
+    actualSleep,
+    bedOffsetSteps,
+    wakeCount,
+    wakeOffsetSteps,
+    draftKey,
+    factors,
+    latency,
+    modalDateStr,
+    mood,
+  ]);
+
+  // Persist *after* React state updates so sliders always save
+  // the latest value (no stale-closure draft writes).
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!interactedRef.current) return;
+    persistDraft();
+  }, [
+    isOpen,
+    actualSleep,
+    bedOffsetSteps,
+    wakeOffsetSteps,
+    wakeCount,
+    mood,
+    factors,
+    latency,
+    persistDraft,
+  ]);
+
+  const clearDraft = useCallback(() => {
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {
+      /* ignore */
+    }
+  }, [draftKey]);
+
+  const loadDraft = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      if (parsed.date !== modalDateStr) return null;
+      return parsed as {
+        v: number;
+        date: string;
+        actualSleep?: unknown;
+        bedOffsetSteps?: unknown;
+        wakeOffsetSteps?: unknown;
+        wakeCount?: unknown;
+        mood?: unknown;
+        factors?: unknown;
+        latency?: unknown;
+      };
+    } catch {
+      return null;
+    }
+  }, [draftKey, modalDateStr]);
 
   /** Hours target for the night you woke up from (yesterday's schedule). */
   const goalHours = useMemo(
@@ -265,13 +350,36 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     if (!isOpen) {
       wasModalOpen.current = false;
+      interactedRef.current = false;
       return;
     }
     void refreshModalLog();
     const justOpened = !wasModalOpen.current;
     wasModalOpen.current = true;
+    if (justOpened) interactedRef.current = false;
     setSaveError(null);
-    if (modalLog) {
+
+    // Prefer any local draft for this date (restores sliders exactly without DB migrations).
+    if (justOpened) {
+      const d = loadDraft();
+      if (d) {
+        const m = typeof d.mood === 'string' ? (d.mood.toLowerCase() as DailySleepMood) : null;
+        setMood(m && MOOD_OPTIONS.some((o) => o.id === m) ? m : 'okay');
+        setWakeCount(Math.max(0, Math.min(99, Math.floor(Number(d.wakeCount) || 0))));
+        setFactors(Array.isArray(d.factors) ? d.factors.map(String).filter(Boolean) : []);
+        setLatency(d.latency == null ? null : Number(d.latency));
+        setActualSleep(Math.max(0, Math.min(24, Number(d.actualSleep) || displayedGoal)));
+        setBedOffsetSteps(
+          Math.max(-OFFSET_MAX_STEPS, Math.min(OFFSET_MAX_STEPS, Math.floor(Number(d.bedOffsetSteps) || 0))),
+        );
+        setWakeOffsetSteps(
+          Math.max(-OFFSET_MAX_STEPS, Math.min(OFFSET_MAX_STEPS, Math.floor(Number(d.wakeOffsetSteps) || 0))),
+        );
+        return;
+      }
+    }
+
+    if (modalLog && !interactedRef.current) {
       setActualSleep(Number(modalLog.actual_sleep_hours));
       setWakeCount(Math.max(0, Math.floor(Number(modalLog.wake_up_count))));
       const m = String(modalLog.mood || '').toLowerCase() as DailySleepMood;
@@ -289,7 +397,9 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
         modalDateStr === todayStr
           ? getPreviousNightPlanBedWakeDateTimes(sleepSummary, zone)
           : getPlanBedWakeDateTimesForWakeDate(sleepSummary, zone, modalDateStr);
+
       if (plan) {
+        // Back-compat: older logs only stored duration (hours). Infer offsets from hours delta.
         const planH = hoursBetweenBedAndWake(plan.bed, plan.wake);
         const actualH = Number(modalLog.actual_sleep_hours);
         const diffMin = Math.round((actualH - planH) * 60);
@@ -406,7 +516,15 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
     <SleepCheckInContext.Provider value={value}>
       {children}
       <Dialog open={isOpen} onOpenChange={handleDialogOpenChange}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md z-[60]">
+        <DialogContent
+          className="max-h-[90vh] overflow-y-auto sm:max-w-md z-[60]"
+          onPointerDownCapture={() => {
+            interactedRef.current = true;
+          }}
+          onKeyDownCapture={() => {
+            interactedRef.current = true;
+          }}
+        >
           <DialogHeader>
             <DialogTitle>
               Log sleep — {DateTime.fromFormat(modalDateStr, 'yyyy-MM-dd', { zone }).toFormat('MMM d')}
@@ -436,6 +554,7 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
                     variant={bedOffsetSteps === 0 && wakeOffsetSteps === 0 ? 'secondary' : 'outline'}
                     className="w-full gap-2"
                     onClick={() => {
+                          interactedRef.current = true;
                       setBedOffsetSteps(0);
                       setWakeOffsetSteps(0);
                     }}
@@ -463,11 +582,12 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
                       <p className="text-[11px] text-muted-foreground">Earlier ← → Later</p>
                       <Slider
                         value={[bedOffsetSteps]}
-                        onValueChange={(v) =>
+                        onValueChange={(v) => {
+                          interactedRef.current = true;
                           setBedOffsetSteps(
                             Math.max(-OFFSET_MAX_STEPS, Math.min(OFFSET_MAX_STEPS, v[0] ?? 0)),
-                          )
-                        }
+                          );
+                        }}
                         min={-OFFSET_MAX_STEPS}
                         max={OFFSET_MAX_STEPS}
                         step={1}
@@ -490,11 +610,12 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
                       <p className="text-[11px] text-muted-foreground">Earlier ← → Later</p>
                       <Slider
                         value={[wakeOffsetSteps]}
-                        onValueChange={(v) =>
+                        onValueChange={(v) => {
+                          interactedRef.current = true;
                           setWakeOffsetSteps(
                             Math.max(-OFFSET_MAX_STEPS, Math.min(OFFSET_MAX_STEPS, v[0] ?? 0)),
-                          )
-                        }
+                          );
+                        }}
                         min={-OFFSET_MAX_STEPS}
                         max={OFFSET_MAX_STEPS}
                         step={1}
@@ -529,7 +650,10 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
                     </div>
                     <Slider
                       value={[actualSleep]}
-                      onValueChange={(v) => setActualSleep(v[0] ?? 0)}
+                      onValueChange={(v) => {
+                        interactedRef.current = true;
+                        setActualSleep(v[0] ?? 0);
+                      }}
                       min={0}
                       max={12}
                       step={0.25}
@@ -546,7 +670,10 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
                   <button
                     key={id}
                     type="button"
-                    onClick={() => setMood(id)}
+                    onClick={() => {
+                      interactedRef.current = true;
+                      setMood(id);
+                    }}
                     title={label}
                     aria-label={label}
                     aria-pressed={mood === id}
@@ -578,7 +705,10 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
                       variant="outline"
                       size="icon"
                       className="h-9 w-9 shrink-0"
-                      onClick={() => setWakeCount((c) => Math.max(0, c - 1))}
+                      onClick={() => {
+                        interactedRef.current = true;
+                        setWakeCount((c) => Math.max(0, c - 1));
+                      }}
                       aria-label="Decrease wake count"
                     >
                       −
@@ -589,7 +719,10 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
                       variant="outline"
                       size="icon"
                       className="h-9 w-9 shrink-0"
-                      onClick={() => setWakeCount((c) => Math.min(99, c + 1))}
+                      onClick={() => {
+                        interactedRef.current = true;
+                        setWakeCount((c) => Math.min(99, c + 1));
+                      }}
                       aria-label="Increase wake count"
                     >
                       +
@@ -606,7 +739,10 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
                         <button
                           key={f}
                           type="button"
-                          onClick={() => toggleFactor(f)}
+                          onClick={() => {
+                            interactedRef.current = true;
+                            toggleFactor(f);
+                          }}
                           aria-pressed={on}
                           className={cn(
                             'rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
@@ -626,9 +762,10 @@ export function SleepCheckInProvider({ children }: { children: React.ReactNode }
                   <p className="text-sm font-medium text-foreground">Time to fall asleep</p>
                   <Select
                     value={latency === null ? 'unspecified' : String(latency)}
-                    onValueChange={(v) =>
-                      setLatency(v === 'unspecified' ? null : Number(v))
-                    }
+                    onValueChange={(v) => {
+                      interactedRef.current = true;
+                      setLatency(v === 'unspecified' ? null : Number(v));
+                    }}
                   >
                     <SelectTrigger className="w-full">
                       <SelectValue placeholder="Optional" />

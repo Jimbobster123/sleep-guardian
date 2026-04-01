@@ -1465,8 +1465,8 @@ export async function upsertDailySleepLog(userId, payload) {
     Array.isArray(factors) ? factors.map(String) : [],
   ];
 
-  const run = (lat) =>
-    pool.query(
+  const run = (lat) => {
+    return pool.query(
       `INSERT INTO "DailySleepLog"
         (user_id, log_date, sleep_goal_hours, actual_sleep_hours, wake_up_count, mood, factors, latency_minutes)
        VALUES ($1, $2::date, $3, $4, $5, $6, $7::text[], $8)
@@ -1481,6 +1481,7 @@ export async function upsertDailySleepLog(userId, payload) {
        RETURNING *`,
       [...baseParams, lat],
     );
+  };
 
   try {
     const result = await run(latResolved);
