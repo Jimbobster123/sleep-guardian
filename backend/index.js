@@ -59,12 +59,22 @@ function isPrivateLanDevOrigin(origin) {
 
 const isProduction = process.env.NODE_ENV === 'production';
 
+function isSleepGuardianVercelOrigin(origin) {
+  try {
+    const u = new URL(origin);
+    return u.hostname.endsWith('.vercel.app') && u.hostname.startsWith('sleep-guardian');
+  } catch {
+    return false;
+  }
+}
+
 app.use(
   cors({
     origin(origin, callback) {
       if (!origin) return callback(null, true);
       if (frontendOrigins.includes(origin)) return callback(null, true);
       if (isLocalDevBrowserOrigin(origin)) return callback(null, true);
+      if (isSleepGuardianVercelOrigin(origin)) return callback(null, true);
       if (!isProduction && isPrivateLanDevOrigin(origin)) return callback(null, true);
       return callback(new Error(`CORS blocked origin: ${origin}`));
     },
