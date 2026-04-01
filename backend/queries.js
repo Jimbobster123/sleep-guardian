@@ -92,6 +92,26 @@ export async function reminderMethodColumnExists() {
   return reminderMethodColumnExistsCache;
 }
 
+let userIsAdminColumnExistsCache = null;
+/** True if `"User".is_admin` exists (migration 009). Older DBs omit this column. */
+export async function userIsAdminColumnExists() {
+  if (userIsAdminColumnExistsCache != null) return userIsAdminColumnExistsCache;
+  try {
+    const result = await pool.query(
+      `SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'User'
+         AND column_name = 'is_admin'
+       LIMIT 1`
+    );
+    userIsAdminColumnExistsCache = result.rows.length > 0;
+  } catch {
+    userIsAdminColumnExistsCache = false;
+  }
+  return userIsAdminColumnExistsCache;
+}
+
 let streakTypeColumnExistsCache = null;
 export async function streakTypeColumnExists() {
   if (streakTypeColumnExistsCache != null) return streakTypeColumnExistsCache;
@@ -460,11 +480,14 @@ export async function deleteTaskCalendarEvents(userId, taskId) {
 export async function getAllUsers() {
   try {
     const withPhone = await userPhoneNumberColumnExists();
+    const withAdmin = await userIsAdminColumnExists();
+    const adminCol = withAdmin ? ', is_admin' : '';
     const cols = withPhone
-      ? 'user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin, created_at'
-      : 'user_id, email, first_name, last_name, timezone, google_calendar_id, is_admin, created_at';
+      ? `user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id${adminCol}, created_at`
+      : `user_id, email, first_name, last_name, timezone, google_calendar_id${adminCol}, created_at`;
     const result = await pool.query(`SELECT ${cols} FROM "User" ORDER BY created_at DESC`);
     if (!withPhone) result.rows.forEach((r) => { r.phone_number = null; });
+    if (!withAdmin) result.rows.forEach((r) => { r.is_admin = false; });
     return result.rows;
   } catch (err) {
     console.error('Error fetching users:', err);
@@ -477,14 +500,17 @@ export async function getUserById(userId) {
   try {
     const withPhone = await userPhoneNumberColumnExists();
     const withStreak = await streakTypeColumnExists();
+    const withAdmin = await userIsAdminColumnExists();
     const streakCol = withStreak ? ', streak_type' : '';
+    const adminCol = withAdmin ? ', is_admin' : '';
     const cols = withPhone
-      ? `user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin, created_at${streakCol}`
-      : `user_id, email, first_name, last_name, timezone, google_calendar_id, is_admin, created_at${streakCol}`;
+      ? `user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id${adminCol}, created_at${streakCol}`
+      : `user_id, email, first_name, last_name, timezone, google_calendar_id${adminCol}, created_at${streakCol}`;
     const result = await pool.query(`SELECT ${cols} FROM "User" WHERE user_id = $1`, [userId]);
     const row = result.rows[0];
     if (row && !withPhone) row.phone_number = null;
     if (row && !withStreak) row.streak_type = 'RECORDING';
+    if (row && !withAdmin) row.is_admin = false;
     return row;
   } catch (err) {
     console.error('Error fetching user:', err);
@@ -633,12 +659,15 @@ export async function updateTaskStatus(taskId, userId, status) {
 
 export async function getUserByEmail(email) {
   const withPhone = await userPhoneNumberColumnExists();
+  const withAdmin = await userIsAdminColumnExists();
+  const adminCol = withAdmin ? ', is_admin' : '';
   const cols = withPhone
-    ? 'user_id, email, password_hash, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin'
-    : 'user_id, email, password_hash, first_name, last_name, timezone, google_calendar_id, is_admin';
+    ? `user_id, email, password_hash, first_name, last_name, phone_number, timezone, google_calendar_id${adminCol}`
+    : `user_id, email, password_hash, first_name, last_name, timezone, google_calendar_id${adminCol}`;
   const result = await pool.query(`SELECT ${cols} FROM "User" WHERE email = $1`, [email]);
   const row = result.rows[0];
   if (row && !withPhone) row.phone_number = null;
+  if (row && !withAdmin) row.is_admin = false;
   return row;
 }
 
@@ -702,11 +731,13 @@ export async function revokeSession(sessionToken) {
 export async function getUserBySessionToken(sessionToken) {
   const withPhone = await userPhoneNumberColumnExists();
   const withStreak = await streakTypeColumnExists();
+  const withAdmin = await userIsAdminColumnExists();
   const phoneCol = withPhone ? ', u.phone_number' : '';
   const streakCol = withStreak ? ', u.streak_type' : '';
+  const adminCol = withAdmin ? ', u.is_admin' : '';
   const result = await pool.query(
     `SELECT u.user_id, u.email, u.first_name, u.last_name${phoneCol}, u.timezone,
-            u.google_refresh_token, u.google_calendar_id, u.is_admin${streakCol}
+            u.google_refresh_token, u.google_calendar_id${adminCol}${streakCol}
      FROM "AuthSession" s
      JOIN "User" u ON u.user_id = s.user_id
      WHERE s.session_token = $1
@@ -717,11 +748,14 @@ export async function getUserBySessionToken(sessionToken) {
   const row = result.rows[0];
   if (row && !withPhone) row.phone_number = null;
   if (row && !withStreak) row.streak_type = 'RECORDING';
+  if (row && !withAdmin) row.is_admin = false;
   return row;
 }
 
 export async function updateUserProfile(userId, { email, first_name, last_name, phone_number, timezone }) {
   const withPhone = await userPhoneNumberColumnExists();
+  const withAdmin = await userIsAdminColumnExists();
+  const adminRet = withAdmin ? ', is_admin' : '';
   if (withPhone) {
     const result = await pool.query(
       `UPDATE "User"
@@ -731,10 +765,12 @@ export async function updateUserProfile(userId, { email, first_name, last_name, 
            phone_number = COALESCE($5, phone_number),
            timezone = COALESCE($6, timezone)
        WHERE user_id = $1
-       RETURNING user_id, email, first_name, last_name, phone_number, timezone, is_admin`,
+       RETURNING user_id, email, first_name, last_name, phone_number, timezone${adminRet}`,
       [userId, asNullIfEmpty(email), asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(phone_number), asNullIfEmpty(timezone)]
     );
-    return result.rows[0];
+    const row = result.rows[0];
+    if (row && !withAdmin) row.is_admin = false;
+    return row;
   }
   const result = await pool.query(
     `UPDATE "User"
@@ -743,21 +779,24 @@ export async function updateUserProfile(userId, { email, first_name, last_name, 
          last_name = COALESCE($4, last_name),
          timezone = COALESCE($5, timezone)
      WHERE user_id = $1
-     RETURNING user_id, email, first_name, last_name, timezone, is_admin`,
+     RETURNING user_id, email, first_name, last_name, timezone${adminRet}`,
     [userId, asNullIfEmpty(email), asNullIfEmpty(first_name), asNullIfEmpty(last_name), asNullIfEmpty(timezone)]
   );
   const row = result.rows[0];
   if (row) row.phone_number = null;
+  if (row && !withAdmin) row.is_admin = false;
   return row;
 }
 
 export async function countAdminUsers() {
+  if (!(await userIsAdminColumnExists())) return 0;
   const result = await pool.query(`SELECT COUNT(*)::int AS n FROM "User" WHERE is_admin = true`);
   return result.rows[0]?.n ?? 0;
 }
 
 export async function updateUserByAdmin(userId, updates) {
   const withPhone = await userPhoneNumberColumnExists();
+  const withAdmin = await userIsAdminColumnExists();
   const fields = [];
   const params = [];
   let n = 1;
@@ -781,7 +820,7 @@ export async function updateUserByAdmin(userId, updates) {
     fields.push(`timezone = $${n++}`);
     params.push(asNullIfEmpty(updates.timezone));
   }
-  if (updates.is_admin !== undefined) {
+  if (withAdmin && updates.is_admin !== undefined) {
     fields.push(`is_admin = $${n++}`);
     params.push(Boolean(updates.is_admin));
   }
@@ -789,14 +828,17 @@ export async function updateUserByAdmin(userId, updates) {
     return getUserById(userId);
   }
   params.push(userId);
+  const adminRet = withAdmin ? ', is_admin' : '';
   const returning = withPhone
-    ? 'RETURNING user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id, is_admin, created_at'
-    : 'RETURNING user_id, email, first_name, last_name, timezone, google_calendar_id, is_admin, created_at';
+    ? `RETURNING user_id, email, first_name, last_name, phone_number, timezone, google_calendar_id${adminRet}, created_at`
+    : `RETURNING user_id, email, first_name, last_name, timezone, google_calendar_id${adminRet}, created_at`;
   const result = await pool.query(
     `UPDATE "User" SET ${fields.join(', ')} WHERE user_id = $${n} ${returning}`,
     params
   );
-  return result.rows[0];
+  const row = result.rows[0];
+  if (row && !withAdmin) row.is_admin = false;
+  return row;
 }
 
 export async function updateUserStreakType(userId, streakType) {
@@ -824,6 +866,7 @@ export async function deleteUserById(userId) {
 }
 
 export async function ensureDefaultAdminUser() {
+  if (!(await userIsAdminColumnExists())) return;
   const check = await pool.query(`SELECT 1 FROM "User" WHERE email = $1 LIMIT 1`, [DEFAULT_ADMIN_EMAIL]);
   if (check.rows.length > 0) return;
   const password_hash = await hashPassword('admin');

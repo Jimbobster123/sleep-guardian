@@ -7,6 +7,7 @@ import {
   DEFAULT_ADMIN_EMAIL,
   getUserByEmail,
   revokeSession,
+  userIsAdminColumnExists,
   userPhoneNumberColumnExists,
 } from '../queries.js';
 import { getMeUserPayload } from '../sleep/streak.js';
@@ -67,11 +68,13 @@ router.post('/signup', async (req, res) => {
 
     const password_hash = await hashPassword(password);
     const hasPhoneCol = await userPhoneNumberColumnExists();
+    const hasAdminCol = await userIsAdminColumnExists();
+    const retAdmin = hasAdminCol ? ', is_admin' : '';
     const userInsert = hasPhoneCol
       ? await client.query(
           `INSERT INTO "User" (email, password_hash, first_name, last_name, phone_number, timezone)
            VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING user_id, email, first_name, last_name, phone_number, timezone, created_at, is_admin`,
+           RETURNING user_id, email, first_name, last_name, phone_number, timezone, created_at${retAdmin}`,
           [
             normalizedEmail,
             password_hash,
@@ -84,7 +87,7 @@ router.post('/signup', async (req, res) => {
       : await client.query(
           `INSERT INTO "User" (email, password_hash, first_name, last_name, timezone)
            VALUES ($1, $2, $3, $4, $5)
-           RETURNING user_id, email, first_name, last_name, timezone, created_at, is_admin`,
+           RETURNING user_id, email, first_name, last_name, timezone, created_at${retAdmin}`,
           [
             normalizedEmail,
             password_hash,
@@ -95,7 +98,7 @@ router.post('/signup', async (req, res) => {
         );
     const user = userInsert.rows[0];
     if (!hasPhoneCol && user) user.phone_number = null;
-    if (user) user.is_admin = Boolean(user.is_admin);
+    if (user) user.is_admin = hasAdminCol ? Boolean(user.is_admin) : false;
 
     const session_token = newSessionToken();
     const expires_at = sessionExpiryDate();
