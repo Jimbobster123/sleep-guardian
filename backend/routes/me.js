@@ -951,14 +951,14 @@ router.post('/schedule/suggestions', requireAuth, async (req, res) => {
   }
 });
 
-// Apply a suggested sleep window (updates SleepWindow table).
+// Apply a suggested sleep window for one calendar day only (that day's day_of_week in SleepWindow).
+// Does not shift other weekdays or change global goal target_bedtime / target_wake_time.
 // Optionally includes a proposed event time so the shifted window avoids that event.
 router.post('/sleep-window/apply-suggestion', requireAuth, async (req, res) => {
   try {
     const { date, proposed_event, sleep_window: requestedSleepWindow, preferred_sleep_window: requestedPreferredSleepWindow, anchor_date: requestedAnchorDate } = req.body || {};
     const goal = await getActiveSleepGoal(req.user.user_id);
     if (!goal) return res.status(404).json({ error: 'No active sleep goal found' });
-    const existingWindows = await getSleepWindows(goal.sleep_goal_id);
 
     let result = null;
     const hasRequestedWindow =
@@ -1002,28 +1002,7 @@ router.post('/sleep-window/apply-suggestion', requireAuth, async (req, res) => {
         ? Math.round((shiftedStart.getTime() - preferredStart.getTime()) / 60000)
         : 0;
 
-    if (existingWindows.length > 0) {
-      for (const window of existingWindows) {
-        await upsertSleepWindow(goal.sleep_goal_id, {
-          day_of_week: Number(window.day_of_week),
-          start_time: shiftTimeStringByMinutes(window.start_time, deltaMinutes),
-          end_time: shiftTimeStringByMinutes(window.end_time, deltaMinutes),
-        });
-      }
-      await upsertSleepWindow(goal.sleep_goal_id, { day_of_week: dow, start_time: startTime, end_time: endTime });
-    } else {
-      await upsertSleepWindow(goal.sleep_goal_id, { day_of_week: dow, start_time: startTime, end_time: endTime });
-    }
-
-    if (deltaMinutes !== 0) {
-      await createOrUpdateSleepGoal(req.user.user_id, {
-        goal_type: goal.goal_type,
-        target_sleep_minutes: goal.target_sleep_minutes ?? null,
-        target_bedtime: goal.target_bedtime ? shiftTimeStringByMinutes(goal.target_bedtime, deltaMinutes) : null,
-        target_wake_time: goal.target_wake_time ? shiftTimeStringByMinutes(goal.target_wake_time, deltaMinutes) : null,
-        bedtime_flex_minutes: goal.bedtime_flex_minutes ?? 0,
-      });
-    }
+    await upsertSleepWindow(goal.sleep_goal_id, { day_of_week: dow, start_time: startTime, end_time: endTime });
     const updatedGoal = await getActiveSleepGoal(req.user.user_id);
     const updatedWindows = updatedGoal ? await getSleepWindows(updatedGoal.sleep_goal_id) : [];
     res.json({

@@ -14,7 +14,24 @@ import {
   ClipboardList,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { format, addDays, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, subWeeks, addMonths, subMonths, eachDayOfInterval, isSameDay, isSameMonth, isToday } from 'date-fns';
+import {
+  format,
+  addDays,
+  subDays,
+  startOfWeek,
+  endOfWeek,
+  startOfMonth,
+  endOfMonth,
+  addWeeks,
+  subWeeks,
+  addMonths,
+  subMonths,
+  eachDayOfInterval,
+  isSameDay,
+  isSameMonth,
+  isToday,
+  parseISO,
+} from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSleepCheckIn } from '@/contexts/SleepCheckInContext';
 import { ApiError, apiJson } from '@/lib/api';
@@ -229,6 +246,7 @@ const CalendarPage = () => {
     };
   } | null>(null);
   const [confirmingShift, setConfirmingShift] = useState(false);
+  const [loadingConflictSuggest, setLoadingConflictSuggest] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingEvent, setEditingEvent] = useState<DbEvent | null>(null);
   const [editingEventTitle, setEditingEventTitle] = useState('');
@@ -424,6 +442,7 @@ const CalendarPage = () => {
 
     return { bedLabel, wakeLabel, windLabel };
   }, [
+    dateStr,
     sleepTimes.source,
     suggestedBedDateTime,
     suggestedEndDt,
@@ -478,6 +497,32 @@ const CalendarPage = () => {
     const durationMin = Math.max(60, endMin - startMin);
     return { startMin, endMin, durationMin };
   }, [sleepTimes, bedHourPrev, wakeHourPrev]);
+
+  /** Bedtime moon sits a few minutes *into* the sleep band so it doesn't straddle the wind-down / sleep edge. */
+  const moonMarkerBedHour = useMemo(() => {
+    const b = sleepTimes.bedHour;
+    const w = sleepTimes.wakeHour;
+    const bumpH = 12 / 60;
+    if (b < w) {
+      const end = w - 1 / 60;
+      return Math.min(b + bumpH, end);
+    }
+    let h = b + bumpH;
+    if (h < 24) return h;
+    h -= 24;
+    if (h < w) return h;
+    return Math.max(0, Math.min(w - 2 / 60, (b + 2 / 60) % 24));
+  }, [sleepTimes.bedHour, sleepTimes.wakeHour]);
+
+  const dayTimelineMarkerTopPct = useCallback(
+    (hourFloat: number) => {
+      let m = minuteFrom3am(hourFloat);
+      if (m < dayVisibleRange.startMin) m += 1440;
+      m = Math.min(Math.max(m, dayVisibleRange.startMin), dayVisibleRange.endMin - 0.01);
+      return ((m - dayVisibleRange.startMin) / dayVisibleRange.durationMin) * 100;
+    },
+    [dayVisibleRange.startMin, dayVisibleRange.endMin, dayVisibleRange.durationMin],
+  );
 
   const visibleHours = useMemo(() => {
     return hours.filter(({ hour }) => {
@@ -773,11 +818,14 @@ const CalendarPage = () => {
       setSuggestions(null);
       setShiftPlanContext(null);
 
-      if (shiftRes?.goal || shiftRes?.windows) {
-        setSleep({
-          goal: shiftRes.goal ?? null,
-          windows: Array.isArray(shiftRes.windows) ? shiftRes.windows : [],
-        });
+      if (shiftRes && (shiftRes.goal != null || (Array.isArray(shiftRes.windows) && shiftRes.windows.length > 0))) {
+        setSleep((prev) => ({
+          goal: shiftRes.goal ?? prev?.goal ?? null,
+          windows:
+            Array.isArray(shiftRes.windows) && shiftRes.windows.length > 0
+              ? shiftRes.windows
+              : prev?.windows ?? [],
+        }));
       }
 
       if (shiftPlanContext.create_after_confirm) {
@@ -788,6 +836,7 @@ const CalendarPage = () => {
             ...shiftPlanContext.create_after_confirm,
             source: 'manual',
             status: 'scheduled',
+            ignore_sleep_validation: true,
           }),
         });
       }
@@ -1478,9 +1527,11 @@ const CalendarPage = () => {
 
               <Button
                 type="button"
+                disabled={loadingConflictSuggest}
                 onClick={async () => {
                   if (!token || !sleepWindowConflict) return;
                   setSleepWindowConflictError(null);
+                  setLoadingConflictSuggest(true);
                   try {
                     const plannedPayload = {
                       title: sleepWindowConflict.title.trim().length ? sleepWindowConflict.title.trim() : null,
@@ -1514,19 +1565,39 @@ const CalendarPage = () => {
                       create_after_confirm: plannedPayload,
                     });
                     setSleepWindowConflict(null);
+                    // Close add-event dialog so the suggestion card is visible (it was still open behind the conflict dialog).
+                    setCreateOpen(false);
+                    setCreateTitle('');
+                    setCreateDescription('');
+                    setCreateEventDate('');
+                    setCreateStartTime('');
+                    setCreateEndDate('');
+                    setCreateEndTime('');
+                    setCreateAllDay(false);
+                    setCreateRepeat('none');
+                    setCreateRepeatCount(5);
+                    setCreateRepeatUntil('');
+                    setCreateError(null);
+                    const d = parseISO(sleepWindowConflict.event_date);
+                    if (!Number.isNaN(d.getTime())) {
+                      setDay(d);
+                    }
+                    setViewMode('day');
                   } catch (err) {
                     setSleepWindowConflictError(err instanceof Error ? err.message : 'Failed to suggest shift');
+                  } finally {
+                    setLoadingConflictSuggest(false);
                   }
                 }}
               >
-                Suggest shift
+                {loadingConflictSuggest ? 'Loading…' : 'Suggest shift'}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        {/* Suggested sleep window (day view only) */}
-        {viewMode === 'day' && suggestions?.sleep_window?.start && suggestions?.sleep_window?.end ? (
+        {/* Suggested sleep window (any view — e.g. after add-event conflict → Suggest shift) */}
+        {suggestions?.sleep_window?.start && suggestions?.sleep_window?.end ? (
           <div className="mb-4 bg-card border border-border/50 rounded-xl p-3">
             <p className="text-xs text-foreground font-medium mb-1">Suggested sleep window</p>
             <p className="text-xs text-muted-foreground">
@@ -1535,6 +1606,12 @@ const CalendarPage = () => {
                 <span className="text-muted-foreground"> (adjusted to fit your schedule)</span>
               ) : null}
             </p>
+            {shiftPlanContext?.create_after_confirm ? (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Confirm to update your sleep window for this day and add the new event to the calendar. Cancel to discard
+                this suggestion (the event is not saved yet).
+              </p>
+            ) : null}
             {suggestions?.warning ? (
               <p className="text-xs text-muted-foreground mt-1">{String(suggestions.warning)}</p>
             ) : null}
@@ -1644,14 +1721,6 @@ const CalendarPage = () => {
                           className="absolute left-0 right-0 z-[4] pointer-events-none wind-down-bg"
                           style={{ top: `${top}%`, height: `${hPct}%` }}
                         />
-                        {/* Wind-down boundary line (top of block) */}
-                        <div
-                          className="absolute left-0 right-0 z-[6] pointer-events-none"
-                          style={{ top: `${top}%` }}
-                        >
-                          <div className="absolute left-0 right-0 h-px bg-accent/50" />
-                        </div>
-
                       </>
                     );
                   })()
@@ -1711,13 +1780,6 @@ const CalendarPage = () => {
                       ? hour >= Math.floor(sleepTimes.bedHour) || inSuggestedPrevTail
                       : (hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(suggestedWakeHourForRows)) || inSuggestedPrevTail;
 
-                  const wakeBoundaryHour = sleepTimes.source === 'suggested'
-                    ? wakeBoundaryHourForDay
-                    : isSavedMode && prevCrossesMidnight
-                      ? wakeHourPrev
-                      : sleepTimes.wakeHour;
-                  const inWakeWindow = hour >= Math.floor(wakeBoundaryHour) && hour < Math.floor(wakeBoundaryHour) + 1;
-                  const isWakeRow = hour === Math.floor(wakeBoundaryHour);
                   const isBedRow = hour === Math.floor(sleepTimes.bedHour);
                   const morningSleepTail = isSavedMode && inPrevEpisode;
 
@@ -1742,8 +1804,9 @@ const CalendarPage = () => {
                     }
                   }
 
-                  const timelineBg =
-                    inSleepWindow ? 'sleep-window-bg' : inWindDown ? 'wind-down-bg' : inWakeWindow ? 'wake-window-bg' : '';
+                  // Wake is shown only via the minute-accurate overlay (30m after wake) — not another full hour row,
+                  // otherwise the calendar shows a double yellow block (overlay + row).
+                  const timelineBg = inSleepWindow ? 'sleep-window-bg' : inWindDown ? 'wind-down-bg' : '';
                   return (
                     <div
                       key={hour}
@@ -1804,8 +1867,8 @@ const CalendarPage = () => {
                         className="absolute left-0 right-0 z-[24] pointer-events-none"
                         style={{ top: `${top + hPct / 2}%` }}
                       >
-                        <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                          <Sunset className="w-4 h-4 text-accent" />
+                        <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                          <Sunset className="w-4 h-4 text-accent" aria-hidden />
                         </div>
                       </div>
                     );
@@ -1813,13 +1876,27 @@ const CalendarPage = () => {
                 ) : null}
                 {wakeBoundaryHourForDay != null ? (
                   (() => {
-                    const top = (((minuteFrom3am(wakeBoundaryHourForDay) < dayVisibleRange.startMin
-                      ? minuteFrom3am(wakeBoundaryHourForDay) + 1440
-                      : minuteFrom3am(wakeBoundaryHourForDay)) - dayVisibleRange.startMin) / dayVisibleRange.durationMin) * 100;
+                    const startH = wakeBoundaryHourForDay;
+                    const endH = startH + 0.5;
+                    const startMinRaw = minuteFrom3am(startH);
+                    const endMinRaw = minuteFrom3am(endH);
+                    const startMin =
+                      startMinRaw < dayVisibleRange.startMin ? startMinRaw + 1440 : startMinRaw;
+                    let endMin = endMinRaw < dayVisibleRange.startMin ? endMinRaw + 1440 : endMinRaw;
+                    if (endMin <= startMin) endMin += 1440;
+                    const clipStart = Math.max(startMin, dayVisibleRange.startMin);
+                    const clipEnd = Math.min(endMin, dayVisibleRange.endMin);
+                    if (clipEnd <= clipStart) return null;
+                    const centerMin = (clipStart + clipEnd) / 2;
+                    const topPct =
+                      ((centerMin - dayVisibleRange.startMin) / dayVisibleRange.durationMin) * 100;
                     return (
-                      <div className="absolute left-0 right-0 z-[24] pointer-events-none" style={{ top: `${top + 1}%` }}>
-                        <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                          <Sun className="w-4 h-4 text-warning" />
+                      <div
+                        className="absolute left-0 right-0 z-[24] pointer-events-none"
+                        style={{ top: `${topPct}%` }}
+                      >
+                        <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                          <Sun className="w-4 h-4 text-warning" aria-hidden />
                         </div>
                       </div>
                     );
@@ -1827,13 +1904,13 @@ const CalendarPage = () => {
                 ) : null}
                 <div
                   className="absolute left-0 right-0 z-[24] pointer-events-none"
-                  style={{ top: `${((minuteFrom3am(sleepTimes.bedHour) < dayVisibleRange.startMin ? minuteFrom3am(sleepTimes.bedHour) + 1440 : minuteFrom3am(sleepTimes.bedHour)) - dayVisibleRange.startMin) / dayVisibleRange.durationMin * 100}%` }}
+                  style={{ top: `${dayTimelineMarkerTopPct(moonMarkerBedHour)}%` }}
                 >
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                    <Moon className="w-4 h-4 text-sleep" />
+                  <div className="absolute left-2 top-1/2 -translate-y-1/2">
+                    <Moon className="w-4 h-4 text-sleep" aria-hidden />
                   </div>
                 </div>
-                <div className="absolute inset-0 z-30 pl-1 pr-8 pointer-events-none">
+                <div className="absolute inset-0 z-30 pl-8 pr-1 pointer-events-none">
                   {dayTimedEvents.map((event) => {
                     let sTime = event.start.getTime();
                     let eTime = event.end.getTime();

@@ -1211,10 +1211,10 @@ export async function getCalendarEventById(userId, eventId) {
   const recurrenceSelect = hasRecurrenceSeriesId ? 'ce.recurrence_series_id' : 'NULL::uuid AS recurrence_series_id';
 
   const result = await pool.query(
-    `SELECT event_id, user_id, title, description, start_datetime, end_datetime, status, source,
-            external_uid, is_all_day, google_event_id, ${recurrenceSelect}
-     FROM "CalendarEvent"
-     WHERE event_id = $1 AND user_id = $2`,
+    `SELECT ce.event_id, ce.user_id, ce.title, ce.description, ce.start_datetime, ce.end_datetime, ce.status, ce.source,
+            ce.external_uid, ce.is_all_day, ce.google_event_id, ${recurrenceSelect}
+     FROM "CalendarEvent" ce
+     WHERE ce.event_id = $1 AND ce.user_id = $2`,
     [eventId, userId]
   );
   return result.rows[0];
