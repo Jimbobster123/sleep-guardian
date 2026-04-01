@@ -493,32 +493,7 @@ const Home = () => {
             className="pointer-events-none absolute inset-x-0 bottom-0 h-[58%] bg-gradient-to-t from-black/55 via-black/20 to-transparent dark:from-black/60 dark:via-black/25"
             aria-hidden
           />
-          <div
-            className="absolute bottom-5 right-5 z-[4] flex max-w-[min(100%,12.5rem)] flex-col gap-0.5 rounded-2xl border border-border/70 bg-card/95 px-3 py-2 shadow-md backdrop-blur-sm dark:border-border/80 dark:bg-card/95"
-            role="group"
-            aria-label={`${streakDays} day streak, ${streakSubtext}`}
-          >
-            <div className="flex items-center gap-2">
-              <Flame className="h-4 w-4 shrink-0 text-warning" aria-hidden />
-              <span className="font-display text-lg font-bold tabular-nums text-foreground">{streakDays}</span>
-              <span className="text-xs font-medium text-muted-foreground">day streak</span>
-            </div>
-            <div className="flex items-center justify-between gap-1 pl-6">
-              <span className="text-[10px] text-muted-foreground leading-tight">{streakSubtext}</span>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigate('/profile?focus=streak');
-                }}
-                className="shrink-0 rounded-md p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                aria-label="Edit streak settings in Profile"
-              >
-                <Pencil className="h-3 w-3" />
-              </button>
-            </div>
-          </div>
-          <div className="absolute inset-0 z-[3] flex flex-col justify-end p-5 md:p-6 pr-[min(30%,11rem)]">
+          <div className="absolute inset-0 z-[3] flex flex-col justify-end p-5 md:p-6">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-primary-foreground">
                 <Moon className="h-5 w-5 shrink-0" aria-hidden />
@@ -535,6 +510,36 @@ const Home = () => {
                   ? `${windDownLine} · ${Math.round(tonightGoalHours * 10) / 10}h target`
                   : `${Math.round(tonightGoalHours * 10) / 10}h sleep goal · wake around ${wakeTime}`}
               </p>
+            </div>
+          </div>
+        </section>
+
+        <section
+          className="rounded-xl border border-border/50 bg-card px-4 py-3 shadow-sm"
+          role="group"
+          aria-label={`${streakDays} day streak, ${streakSubtext}`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">{streakSubtext}</p>
+              <p className="text-[10px] text-muted-foreground">Consecutive days</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="text-right">
+                <p className="flex items-center justify-end gap-1 font-display text-2xl font-bold tabular-nums text-foreground">
+                  <Flame className="h-5 w-5 text-accent" aria-hidden />
+                  <span>{streakDays}</span>
+                </p>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">day streak</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/profile?focus=streak')}
+                className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                aria-label="Edit streak settings in Profile"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
             </div>
           </div>
         </section>

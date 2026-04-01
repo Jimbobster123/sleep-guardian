@@ -13,8 +13,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import nightSky from '@/assets/night-sky-header.jpg';
 import { DateTime } from 'luxon';
-import { ChevronLeft, ChevronRight, Moon, Shield } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Flame, Moon, Pencil, Shield } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 type SleepGoalSummary = {
   goal: {
@@ -73,9 +74,12 @@ const SleepPage = () => {
   const { token, user } = useAuth();
   const streakDays = streakDaysForUser(user);
   const { crisisMode, bedtime, wakeTime } = useApp();
+  const navigate = useNavigate();
   const zone = useMemo(() => effectiveTimeZone(user?.timezone), [user?.timezone]);
   const [sleepRes, setSleepRes] = useState<SleepGoalSummary | null>(null);
   const [selectedLog, setSelectedLog] = useState<DailySleepLog | null>(null);
+  const streakSubtext =
+    user?.streak_type === 'GOAL_MET' ? 'Goal Completion Streak' : 'Daily Log Streak';
   const [editTonightOpen, setEditTonightOpen] = useState(false);
   const [editBedtime, setEditBedtime] = useState('23:00');
   const [editWakeTime, setEditWakeTime] = useState('07:00');
@@ -314,14 +318,40 @@ const SleepPage = () => {
               <Moon className="h-5 w-5" />
               <span className="text-xs font-semibold uppercase tracking-wider">Tonight</span>
             </div>
-            <h1 className="mt-1 font-display text-2xl font-semibold text-primary-foreground md:text-3xl">
-              {tonightLine}
-            </h1>
+            <div className="mt-1">
+              <h1 className="font-display text-2xl font-semibold text-primary-foreground md:text-3xl">
+                {tonightLine}
+              </h1>
+            </div>
             <p className="mt-2 max-w-lg text-sm text-primary-foreground/85">
-              {flexMins != null
-                ? `${flexMins} min wind-down before bed · ${streakDays}-day streak`
-                : `${streakDays}-day streak · stay gentle with yourself`}
+              {flexMins != null ? `${flexMins} min wind-down before bed` : 'Stay gentle with yourself tonight'}
             </p>
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-border/50 bg-card px-4 py-3 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">{streakSubtext}</p>
+              <p className="text-[10px] text-muted-foreground">Consecutive days</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="text-right">
+              <p className="flex items-center justify-end gap-1 font-display text-2xl font-bold tabular-nums text-foreground">
+                <Flame className="h-5 w-5 text-accent" />
+                <span>{streakDays}</span>
+              </p>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">day streak</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/profile?focus=streak')}
+                className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                aria-label="Edit streak settings in Profile"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            </div>
           </div>
         </section>
 

@@ -50,6 +50,27 @@ function toYmd(d) {
 }
 
 /**
+ * Normalize DailySleepLog.log_date to yyyy-MM-dd.
+ * We count streaks by the day the log is for (log_date), never by created_at/updated_at.
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function normalizeLogDateYmd(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const m = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : null;
+  }
+  if (value instanceof Date) {
+    const t = DateTime.fromJSDate(value, { zone: 'utc' });
+    return t.isValid ? t.toFormat('yyyy-MM-dd') : null;
+  }
+  const s = String(value);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
+/**
  * @param {Map<string, object>} byDate
  * @param {'RECORDING' | 'GOAL_MET'} type
  * @param {string} ymd
@@ -107,7 +128,8 @@ async function loadLogMapThroughEffectiveEnd(userId, zone) {
   const rows = await listDailySleepLogsInRange(userId, from, toInclusive);
   const byDate = new Map();
   for (const r of rows) {
-    const d = typeof r.log_date === 'string' ? r.log_date.slice(0, 10) : String(r.log_date).slice(0, 10);
+    const d = normalizeLogDateYmd(r.log_date);
+    if (!d) continue;
     byDate.set(d, r);
   }
   return { byDate, effectiveEnd };

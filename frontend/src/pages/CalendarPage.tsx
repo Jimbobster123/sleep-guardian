@@ -131,6 +131,7 @@ type ScheduleSuggestions = {
   preferred_sleep_window?: { start: string; end: string };
   sleep_window?: { start: string; end: string };
   moved_sleep_window?: boolean;
+  anchor_date?: string;
   warning?: string;
 };
 
@@ -202,6 +203,21 @@ const CalendarPage = () => {
     description: string;
   } | null>(null);
   const [sleepWindowConflictError, setSleepWindowConflictError] = useState<string | null>(null);
+  const [shiftPlanContext, setShiftPlanContext] = useState<{
+    date: string;
+    proposed_event?: { start_datetime: string; end_datetime: string };
+    create_after_confirm?: {
+      title: string | null;
+      description: string | null;
+      start_datetime: string;
+      end_datetime: string;
+      is_all_day: boolean;
+      repeat: string;
+      repeat_count: number;
+      repeat_until: string | null;
+    };
+  } | null>(null);
+  const [confirmingShift, setConfirmingShift] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editingEvent, setEditingEvent] = useState<DbEvent | null>(null);
   const [editingEventTitle, setEditingEventTitle] = useState('');
@@ -277,45 +293,87 @@ const CalendarPage = () => {
     return w || null;
   }, [sleep, dow]);
 
+  const selectedDayStart = useMemo(
+    () => DateTime.fromISO(dateStr, { zone }).startOf('day'),
+    [dateStr, zone],
+  );
+
+  const suggestedStartDt = useMemo(() => {
+    if (!suggestions?.sleep_window?.start) return null;
+    return parseApiTimestamp(String(suggestions.sleep_window.start), zone);
+  }, [suggestions?.sleep_window?.start, zone]);
+
+  const suggestedEndDt = useMemo(() => {
+    if (!suggestions?.sleep_window?.end) return null;
+    return parseApiTimestamp(String(suggestions.sleep_window.end), zone);
+  }, [suggestions?.sleep_window?.end, zone]);
+
+  const suggestionCoversBedOnSelectedDay = useMemo(
+    () => Boolean(suggestedStartDt?.isValid && suggestedStartDt.hasSame(selectedDayStart, 'day')),
+    [suggestedStartDt, selectedDayStart],
+  );
+
+  const suggestionCoversWakeOnSelectedDay = useMemo(
+    () => Boolean(suggestedEndDt?.isValid && suggestedEndDt.hasSame(selectedDayStart, 'day')),
+    [suggestedEndDt, selectedDayStart],
+  );
+
   const sleepTimes = useMemo(() => {
     // If we have a suggestion, shade the calendar using the suggested sleep window.
-    const s0 = suggestions?.sleep_window?.start ? parseApiTimestamp(String(suggestions.sleep_window.start), zone) : null;
-    const s1 = suggestions?.sleep_window?.end ? parseApiTimestamp(String(suggestions.sleep_window.end), zone) : null;
+    const s0 = suggestedStartDt;
+    const s1 = suggestedEndDt;
+    const savedBed = String(windowForDay?.start_time || sleep?.goal?.target_bedtime || '23:00:00').slice(0, 5);
+    const savedWake = String(windowForDay?.end_time || sleep?.goal?.target_wake_time || '07:00:00').slice(0, 5);
+    const [savedBh, savedBm] = savedBed.split(':').map(Number);
+    const [savedWh, savedWm] = savedWake.split(':').map(Number);
+    const savedBedHour = (savedBh || 0) + (savedBm || 0) / 60;
+    const savedWakeHour = (savedWh || 0) + (savedWm || 0) / 60;
+
     if (s0 && s1 && s0.isValid && s1.isValid) {
+      // Suggestion spans a bedtime episode that may cross calendar days.
+      // Keep wake/bed boundaries pinned to the selected day:
+      // - bedtime shifts on the selected day only if suggestion starts today
+      // - wake shifts on the selected day only if suggestion ends today
+      const bedHour = suggestionCoversBedOnSelectedDay
+        ? s0.hour + s0.minute / 60 + s0.second / 3600
+        : savedBedHour;
+      const wakeHour = suggestionCoversWakeOnSelectedDay
+        ? s1.hour + s1.minute / 60 + s1.second / 3600
+        : savedWakeHour;
       return {
-        bedHour: s0.hour + s0.minute / 60 + s0.second / 3600,
-        wakeHour: s1.hour + s1.minute / 60 + s1.second / 3600,
+        bedHour,
+        wakeHour,
         label: `${s0.toFormat('h:mm a')} – ${s1.toFormat('h:mm a')}`,
         source: 'suggested' as const,
       };
     }
 
-    const bed = String(windowForDay?.start_time || sleep?.goal?.target_bedtime || '23:00:00').slice(0, 5);
-    const wake = String(windowForDay?.end_time || sleep?.goal?.target_wake_time || '07:00:00').slice(0, 5);
-    const [bh, bm] = bed.split(':').map(Number);
-    const [wh, wm] = wake.split(':').map(Number);
     return {
-      bedHour: (bh || 0) + (bm || 0) / 60,
-      wakeHour: (wh || 0) + (wm || 0) / 60,
-      label: `${timeTo12Hour(bed)} – ${timeTo12Hour(wake)}`,
+      bedHour: savedBedHour,
+      wakeHour: savedWakeHour,
+      label: `${timeTo12Hour(savedBed)} – ${timeTo12Hour(savedWake)}`,
       source: 'saved' as const,
     };
-  }, [windowForDay, sleep, suggestions]);
+  }, [
+    suggestedStartDt,
+    suggestedEndDt,
+    suggestionCoversBedOnSelectedDay,
+    suggestionCoversWakeOnSelectedDay,
+    windowForDay,
+    sleep,
+  ]);
 
   const windDownFlexMins = useMemo(
     () => Math.max(0, Math.round(Number(sleep?.goal?.bedtime_flex_minutes ?? 0))),
     [sleep?.goal?.bedtime_flex_minutes],
   );
 
-  const suggestedBedDateTime = useMemo(() => {
-    if (!suggestions?.sleep_window?.start) return null;
-    return parseApiTimestamp(String(suggestions.sleep_window.start), zone);
-  }, [suggestions?.sleep_window?.start, zone]);
+  const suggestedBedDateTime = suggestedStartDt;
 
   /** Wind-down start as hour float (0–24) for icon marker row in day view. */
   const windDownStartHourForDay = useMemo(() => {
     if (windDownFlexMins <= 0) return null;
-    if (sleepTimes.source === 'suggested' && suggestedBedDateTime?.isValid) {
+    if (sleepTimes.source === 'suggested' && suggestedBedDateTime?.isValid && suggestionCoversBedOnSelectedDay) {
       const w = suggestedBedDateTime.minus({ minutes: windDownFlexMins });
       return w.isValid ? w.hour + w.minute / 60 + w.second / 3600 : null;
     }
@@ -323,13 +381,13 @@ const CalendarPage = () => {
       return (sleepTimes.bedHour - windDownFlexMins / 60 + 24) % 24;
     }
     return null;
-  }, [windDownFlexMins, sleepTimes.source, sleepTimes.bedHour, suggestedBedDateTime]);
+  }, [windDownFlexMins, sleepTimes.source, sleepTimes.bedHour, suggestedBedDateTime, suggestionCoversBedOnSelectedDay]);
 
   const sleepMarkerLabels = useMemo(() => {
     const wind = windDownFlexMins;
     if (sleepTimes.source === 'suggested') {
       const bedDt = suggestedBedDateTime;
-      const wakeDt = suggestions?.sleep_window?.end ? parseApiTimestamp(String(suggestions.sleep_window.end), zone) : null;
+      const wakeDt = suggestedEndDt;
       const bedLabel = bedDt?.isValid ? bedDt.toFormat('h:mm a') : null;
       const wakeLabel = wakeDt?.isValid ? wakeDt.toFormat('h:mm a') : null;
       const windLabel = bedDt?.isValid && wind > 0 ? bedDt.minus({ minutes: wind }).toFormat('h:mm a') : null;
@@ -357,7 +415,7 @@ const CalendarPage = () => {
   }, [
     sleepTimes.source,
     suggestedBedDateTime,
-    suggestions?.sleep_window?.end,
+    suggestedEndDt,
     zone,
     windDownFlexMins,
     windowForDay?.start_time,
@@ -388,10 +446,15 @@ const CalendarPage = () => {
   }, [prevWindowForDay, sleep?.goal?.target_bedtime]);
 
   const wakeBoundaryHourForDay = useMemo(() => {
-    const isSavedMode = sleepTimes.source === 'saved';
-    const prevCrossesMidnight = isSavedMode ? bedHourPrev >= wakeHourPrev : false;
-    return isSavedMode && prevCrossesMidnight ? wakeHourPrev : sleepTimes.wakeHour;
-  }, [sleepTimes.source, sleepTimes.wakeHour, bedHourPrev, wakeHourPrev]);
+    const savedPrevBoundary = bedHourPrev >= wakeHourPrev ? wakeHourPrev : sleepTimes.wakeHour;
+    if (sleepTimes.source === 'suggested') {
+      if (suggestionCoversWakeOnSelectedDay && suggestedEndDt?.isValid) {
+        return suggestedEndDt.hour + suggestedEndDt.minute / 60 + suggestedEndDt.second / 3600;
+      }
+      return savedPrevBoundary;
+    }
+    return savedPrevBoundary;
+  }, [sleepTimes.source, sleepTimes.wakeHour, bedHourPrev, wakeHourPrev, suggestionCoversWakeOnSelectedDay, suggestedEndDt]);
 
   const dayVisibleRange = useMemo(() => {
     const wakeBoundaryHour = sleepTimes.source === 'saved' && bedHourPrev >= wakeHourPrev ? wakeHourPrev : sleepTimes.wakeHour;
@@ -679,6 +742,44 @@ const CalendarPage = () => {
   const reloadSleepAndEvents = useCallback(async () => {
     await Promise.all([reloadSleepGoal(), reloadCalendarEvents()]);
   }, [reloadSleepGoal, reloadCalendarEvents]);
+
+  const applyConfirmedShift = useCallback(async () => {
+    if (!token || !shiftPlanContext) return;
+    setConfirmingShift(true);
+    try {
+      await apiJson('/api/me/sleep-window/apply-suggestion', {
+        method: 'POST',
+        token,
+        body: JSON.stringify({
+          date: shiftPlanContext.date,
+          proposed_event: shiftPlanContext.proposed_event || null,
+        }),
+      });
+
+      if (shiftPlanContext.create_after_confirm) {
+        await apiJson('/api/me/calendar-events', {
+          method: 'POST',
+          token,
+          body: JSON.stringify({
+            ...shiftPlanContext.create_after_confirm,
+            source: 'manual',
+            status: 'scheduled',
+          }),
+        });
+      }
+
+      await reloadSleepAndEvents();
+      setSuggestions(null);
+      setShiftPlanContext(null);
+
+      if (shiftPlanContext.create_after_confirm) {
+        setSleepWindowConflict(null);
+        setCreateOpen(false);
+      }
+    } finally {
+      setConfirmingShift(false);
+    }
+  }, [token, shiftPlanContext, reloadSleepAndEvents]);
 
   const persistEventTimeMove = useCallback(
     async (ev: DayViewEvent, newStart: Date, newEnd: Date) => {
@@ -1356,7 +1457,18 @@ const CalendarPage = () => {
                   if (!token || !sleepWindowConflict) return;
                   setSleepWindowConflictError(null);
                   try {
-                    await apiJson('/api/me/sleep-window/apply-suggestion', {
+                    const plannedPayload = {
+                      title: sleepWindowConflict.title.trim().length ? sleepWindowConflict.title.trim() : null,
+                      description: sleepWindowConflict.description.trim().length ? sleepWindowConflict.description.trim() : null,
+                      start_datetime: sleepWindowConflict.start_datetime,
+                      end_datetime: sleepWindowConflict.end_datetime,
+                      is_all_day: sleepWindowConflict.is_all_day,
+                      repeat: sleepWindowConflict.repeat,
+                      repeat_count: sleepWindowConflict.repeat_count,
+                      repeat_until: sleepWindowConflict.repeat_until,
+                    };
+
+                    const res = await apiJson<ScheduleSuggestions>('/api/me/schedule/suggestions', {
                       method: 'POST',
                       token,
                       body: JSON.stringify({
@@ -1367,31 +1479,16 @@ const CalendarPage = () => {
                         },
                       }),
                     });
-
-                    // Clear preview suggestions so the UI uses the updated saved sleep window.
-                    setSuggestions(null);
-                    await reloadSleepAndEvents();
-
-                    await apiJson('/api/me/calendar-events', {
-                      method: 'POST',
-                      token,
-                      body: JSON.stringify({
-                        title: sleepWindowConflict.title.trim().length ? sleepWindowConflict.title.trim() : null,
-                        description: sleepWindowConflict.description.trim().length ? sleepWindowConflict.description.trim() : null,
+                    setSuggestions(res);
+                    setShiftPlanContext({
+                      date: sleepWindowConflict.event_date,
+                      proposed_event: {
                         start_datetime: sleepWindowConflict.start_datetime,
                         end_datetime: sleepWindowConflict.end_datetime,
-                        is_all_day: sleepWindowConflict.is_all_day,
-                        source: 'manual',
-                        status: 'scheduled',
-                        repeat: sleepWindowConflict.repeat,
-                        repeat_count: sleepWindowConflict.repeat_count,
-                        repeat_until: sleepWindowConflict.repeat_until,
-                      }),
+                      },
+                      create_after_confirm: plannedPayload,
                     });
-
-                    await reloadCalendarEvents();
                     setSleepWindowConflict(null);
-                    setCreateOpen(false);
                   } catch (err) {
                     setSleepWindowConflictError(err instanceof Error ? err.message : 'Failed to suggest shift');
                   }
@@ -1416,6 +1513,28 @@ const CalendarPage = () => {
             {suggestions?.warning ? (
               <p className="text-xs text-muted-foreground mt-1">{String(suggestions.warning)}</p>
             ) : null}
+            <div className="mt-3 flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void applyConfirmedShift()}
+                disabled={confirmingShift}
+              >
+                {confirmingShift ? 'Applying…' : 'Confirm shift'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setSuggestions(null);
+                  setShiftPlanContext(null);
+                }}
+                disabled={confirmingShift}
+              >
+                Cancel
+              </Button>
+            </div>
           </div>
         ) : null}
 
@@ -1434,15 +1553,7 @@ const CalendarPage = () => {
                   body: JSON.stringify({ date: dateStr }),
                 });
                 setSuggestions(res);
-
-                // Apply the suggested sleep window so the protected purple zones move.
-                await apiJson('/api/me/sleep-window/apply-suggestion', {
-                  method: 'POST',
-                  token,
-                  body: JSON.stringify({ date: dateStr }),
-                });
-
-                await reloadSleepAndEvents();
+                setShiftPlanContext({ date: dateStr });
               }}
               className="text-xs font-medium text-accent flex items-center gap-1 min-w-fit"
             >
@@ -1576,13 +1687,20 @@ const CalendarPage = () => {
                   const prevCrossesMidnight = isSavedMode ? bedHourPrev >= wakeHourPrev : false;
                   const inPrevEpisode = isSavedMode ? prevCrossesMidnight && hour < Math.floor(wakeHourPrev) : false;
 
+                  const suggestedUsesPrevWakeTail =
+                    sleepTimes.source === 'suggested' &&
+                    !suggestionCoversWakeOnSelectedDay &&
+                    bedHourPrev >= wakeHourPrev;
+                  const inSuggestedPrevTail = suggestedUsesPrevWakeTail && hour < Math.floor(wakeHourPrev);
+                  const suggestedWakeHourForRows = suggestionCoversWakeOnSelectedDay ? sleepTimes.wakeHour : wakeHourPrev;
+
                   const inSleepWindow = isSavedMode
                     ? currentCrossesMidnight
                       ? hour >= Math.floor(sleepTimes.bedHour) || inPrevEpisode
                       : (hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(sleepTimes.wakeHour)) || inPrevEpisode
                     : currentCrossesMidnight
-                      ? hour >= Math.floor(sleepTimes.bedHour) || hour < Math.floor(sleepTimes.wakeHour)
-                      : hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(sleepTimes.wakeHour);
+                      ? hour >= Math.floor(sleepTimes.bedHour) || inSuggestedPrevTail
+                      : (hour >= Math.floor(sleepTimes.bedHour) && hour < Math.floor(suggestedWakeHourForRows)) || inSuggestedPrevTail;
 
                   const wakeBoundaryHour = isSavedMode && prevCrossesMidnight ? wakeHourPrev : sleepTimes.wakeHour;
                   const isWakeRow = hour === Math.floor(wakeBoundaryHour);
